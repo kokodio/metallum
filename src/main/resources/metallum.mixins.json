@@ -3,7 +3,9 @@
 	"package": "com.metallum.mixin",
 	"compatibilityLevel": "JAVA_25",
 	"mixins": [
-		"ExampleMixin"
+	],
+	"client": [
+		"PreferredGraphicsApiMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

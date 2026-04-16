@@ -33,6 +33,30 @@ processResources {
 	}
 }
 
+tasks.register("buildMacNative", Exec) {
+	onlyIf {
+		org.gradle.internal.os.OperatingSystem.current().isMacOsX()
+	}
+
+	workingDir project.projectDir
+
+	commandLine "clang",
+		"-dynamiclib",
+		"-fobjc-arc",
+		"-mmacosx-version-min=13.0",
+		"-arch", "arm64",
+		"-arch", "x86_64",
+		"-framework", "Foundation",
+		"-framework", "Metal",
+		"-framework", "QuartzCore",
+		"-o", "src/main/resources/natives/macos/libmetallum.dylib",
+		"src/main/native/metallum_native.m"
+}
+
+tasks.named("processResources") {
+	dependsOn(tasks.named("buildMacNative"))
+}
+
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 25
 }
