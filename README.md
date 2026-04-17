@@ -1,8 +1,6 @@
 # Metallum
 
-## Setup
-
-For setup instructions, please see the [Fabric Documentation page](https://docs.fabricmc.net/develop/getting-started/creating-a-project#setting-up) related to the IDE that you are using.
+This is extremely vibe-coded and very much a proof of concept, not a polished production-ready renderer.
 
 ## License
 

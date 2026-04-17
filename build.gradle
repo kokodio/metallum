@@ -39,6 +39,9 @@ tasks.register("buildMacNative", Exec) {
 	}
 
 	workingDir project.projectDir
+	doFirst {
+		file("src/main/resources/natives/macos").mkdirs()
+	}
 
 	commandLine "clang",
 		"-dynamiclib",
