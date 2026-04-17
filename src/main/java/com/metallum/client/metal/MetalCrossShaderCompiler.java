@@ -229,8 +229,8 @@ final class MetalCrossShaderCompiler {
 		final String fragmentMsl
 	) {
 		String resourceAttribute = switch (kind) {
-			case UNIFORM_BUFFER, TEXEL_BUFFER -> "buffer";
-			case SAMPLED_IMAGE -> "texture";
+			case UNIFORM_BUFFER -> "buffer";
+			case TEXEL_BUFFER, SAMPLED_IMAGE -> "texture";
 		};
 		String marker = "[[" + resourceAttribute + "(" + bindingIndex + ")]]";
 		int mask = 0;

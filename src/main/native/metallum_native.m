@@ -954,6 +954,40 @@ void *metallum_create_texture_view(void *texturePtr, uint64_t baseMipLevel, uint
                                                               levels:levels
                                                               slices:slices];
         return view == nil ? NULL : (__bridge_retained void *)view;
+	}
+}
+
+void *metallum_create_buffer_texture_view(
+    void *bufferPtr,
+    uint64_t pixelFormat,
+    uint64_t offset,
+    uint64_t width,
+    uint64_t height,
+    uint64_t bytesPerRow
+) {
+    @autoreleasepool {
+        id<MTLBuffer> buffer = (__bridge id<MTLBuffer>)bufferPtr;
+        if (buffer == nil || width == 0 || height == 0 || bytesPerRow == 0) {
+            return NULL;
+        }
+
+        MTLTextureDescriptor *descriptor = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:(MTLPixelFormat)pixelFormat
+                                                                                               width:(NSUInteger)width
+                                                                                              height:(NSUInteger)height
+                                                                                           mipmapped:NO];
+        descriptor.usage = MTLTextureUsageShaderRead;
+        descriptor.storageMode = buffer.storageMode;
+
+        NSUInteger nativeOffset = (NSUInteger)offset;
+        NSUInteger nativeBytesPerRow = (NSUInteger)bytesPerRow;
+        if (nativeOffset + nativeBytesPerRow * (NSUInteger)height > buffer.length) {
+            return NULL;
+        }
+
+        id<MTLTexture> texture = [buffer newTextureWithDescriptor:descriptor
+                                                           offset:nativeOffset
+                                                      bytesPerRow:nativeBytesPerRow];
+        return texture == nil ? NULL : (__bridge_retained void *)texture;
     }
 }
 

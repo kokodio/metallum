@@ -789,7 +789,8 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		}
 
 		if (binding.kind() == MetalCompiledRenderPipeline.ResourceKind.TEXEL_BUFFER) {
-			throw new IllegalStateException("Unsupported texel buffer binding " + binding.name());
+			this.applyTexelBufferBinding(pass, nativeRenderPass, binding);
+			return;
 		}
 
 		GpuBufferSlice uniformSlice = pass.uniforms().get(binding.name());
@@ -811,6 +812,56 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		if (result != 0) {
 			throw new IllegalStateException("Failed to set uniform binding " + binding.name() + ", code " + result);
 		}
+	}
+
+	private void applyTexelBufferBinding(
+		final MetalRenderPass pass,
+		final Pointer nativeRenderPass,
+		final MetalCompiledRenderPipeline.ResourceBinding binding
+	) {
+		GpuBufferSlice texelSlice = pass.uniforms().get(binding.name());
+		if (texelSlice == null) {
+			throw new IllegalStateException("Missing texel buffer " + binding.name());
+		}
+		if (MetalRenderPass.VALIDATION && texelSlice.buffer().isClosed()) {
+			throw new IllegalStateException("Texel buffer " + binding.name() + " has been closed");
+		}
+
+		GpuFormat texelFormat = binding.texelBufferFormat();
+		if (texelFormat == null) {
+			throw new IllegalStateException("Texel buffer " + binding.name() + " is missing a format");
+		}
+
+		MetalGpuBuffer texelBuffer = castBuffer(texelSlice.buffer());
+		long pixelFormat = texelBufferPixelFormatCode(texelFormat);
+		int pixelSize = texelFormat.pixelSize();
+		long width = 4096L;
+		long bytesPerRow = width * pixelSize;
+		long height = Math.max(1L, (texelSlice.length() + bytesPerRow - 1L) / bytesPerRow);
+		Pointer texelTexture = MetalNativeBridge.INSTANCE.metallum_create_buffer_texture_view(
+			texelBuffer.nativeHandle(),
+			pixelFormat,
+			texelSlice.offset(),
+			width,
+			height,
+			bytesPerRow
+		);
+		if (MetalProbe.isNullPointer(texelTexture)) {
+			throw new IllegalStateException("Failed to create Metal texel buffer texture for " + binding.name());
+		}
+
+		int result = MetalNativeBridge.INSTANCE.metallum_render_pass_set_texture_binding(
+			nativeRenderPass,
+			binding.bindingIndex(),
+			texelTexture,
+			null,
+			binding.stageMask()
+		);
+		if (result != 0) {
+			MetalNativeBridge.INSTANCE.metallum_release_object(texelTexture);
+			throw new IllegalStateException("Failed to set texel buffer binding " + binding.name() + ", code " + result);
+		}
+		this.queueForDestroy(() -> MetalNativeBridge.INSTANCE.metallum_release_object(texelTexture));
 	}
 
 	private static MetalGpuBuffer castBuffer(final GpuBuffer buffer) {
@@ -1059,6 +1110,50 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 			case RGB16_SNORM -> 35L;
 			case RGB16_FLOAT -> 36L;
 			default -> 0L;
+		};
+	}
+
+	private static long texelBufferPixelFormatCode(final GpuFormat format) {
+		return switch (format) {
+			case R8_UNORM -> 10L;
+			case R8_SNORM -> 12L;
+			case R8_UINT -> 13L;
+			case R8_SINT -> 14L;
+			case R16_UNORM -> 20L;
+			case R16_SNORM -> 22L;
+			case R16_UINT -> 23L;
+			case R16_SINT -> 24L;
+			case R16_FLOAT -> 25L;
+			case RG8_UNORM -> 30L;
+			case RG8_SNORM -> 32L;
+			case RG8_UINT -> 33L;
+			case RG8_SINT -> 34L;
+			case R32_UINT -> 53L;
+			case R32_SINT -> 54L;
+			case R32_FLOAT -> 55L;
+			case RG16_UNORM -> 60L;
+			case RG16_SNORM -> 62L;
+			case RG16_UINT -> 63L;
+			case RG16_SINT -> 64L;
+			case RG16_FLOAT -> 65L;
+			case RGBA8_UNORM -> 70L;
+			case RGBA8_SNORM -> 72L;
+			case RGBA8_UINT -> 73L;
+			case RGBA8_SINT -> 74L;
+			case RGB10A2_UNORM -> 90L;
+			case RG11B10_FLOAT -> 92L;
+			case RG32_UINT -> 103L;
+			case RG32_SINT -> 104L;
+			case RG32_FLOAT -> 105L;
+			case RGBA16_UNORM -> 110L;
+			case RGBA16_SNORM -> 112L;
+			case RGBA16_UINT -> 113L;
+			case RGBA16_SINT -> 114L;
+			case RGBA16_FLOAT -> 115L;
+			case RGBA32_UINT -> 123L;
+			case RGBA32_SINT -> 124L;
+			case RGBA32_FLOAT -> 125L;
+			default -> throw new IllegalStateException("Unsupported Metal texel buffer format: " + format);
 		};
 	}
 

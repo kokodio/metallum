@@ -68,7 +68,7 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline {
 		int maxBufferBinding = -1;
 		int maxTextureBinding = -1;
 		for (ResourceBinding resource : resources) {
-			if (resource.kind() == ResourceKind.SAMPLED_IMAGE) {
+			if (resource.kind() == ResourceKind.SAMPLED_IMAGE || resource.kind() == ResourceKind.TEXEL_BUFFER) {
 				maxTextureBinding = Math.max(maxTextureBinding, resource.bindingIndex());
 			} else {
 				maxBufferBinding = Math.max(maxBufferBinding, resource.bindingIndex());

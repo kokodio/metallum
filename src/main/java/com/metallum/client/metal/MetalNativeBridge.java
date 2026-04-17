@@ -38,6 +38,7 @@ final class MetalNativeBridge {
 	private final MethodHandle copyBufferToBuffer;
 	private final MethodHandle createTexture2d;
 	private final MethodHandle createTextureView;
+	private final MethodHandle createBufferTextureView;
 	private final MethodHandle copyBufferToTexture;
 	private final MethodHandle copyTextureToTexture;
 	private final MethodHandle copyTextureToBuffer;
@@ -83,6 +84,11 @@ final class MetalNativeBridge {
 			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG)
 		);
 		this.createTextureView = downcall(lookup, "metallum_create_texture_view", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG));
+		this.createBufferTextureView = downcall(
+			lookup,
+			"metallum_create_buffer_texture_view",
+			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG, LONG)
+		);
 		this.copyBufferToTexture = downcall(
 			lookup,
 			"metallum_copy_buffer_to_texture",
@@ -317,6 +323,21 @@ final class MetalNativeBridge {
 			return toPointer((MemorySegment)this.createTextureView.invokeExact(toSegment(texture), baseMipLevel, mipLevelCount));
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_create_texture_view", throwable);
+		}
+	}
+
+	Pointer metallum_create_buffer_texture_view(
+		final Pointer buffer,
+		final long pixelFormat,
+		final long offset,
+		final long width,
+		final long height,
+		final long bytesPerRow
+	) {
+		try {
+			return toPointer((MemorySegment)this.createBufferTextureView.invokeExact(toSegment(buffer), pixelFormat, offset, width, height, bytesPerRow));
+		} catch (Throwable throwable) {
+			throw bridgeFailure("metallum_create_buffer_texture_view", throwable);
 		}
 	}
 
