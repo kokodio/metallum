@@ -40,6 +40,7 @@ import org.slf4j.Logger;
 final class MetalCrossShaderCompiler {
 	private static final Logger LOGGER = LogUtils.getLogger();
 	private static final boolean SHADER_DUMPS_ENABLED = Boolean.getBoolean("metallum.debug.shaders");
+	private static final int MSL_VERSION_4_0 = 0x040000;
 	private static final Pattern VERTEX_ENTRY_PATTERN = Pattern.compile("\\bvertex\\s+\\w+\\s+(\\w+)\\s*\\(");
 	private static final Pattern FRAGMENT_ENTRY_PATTERN = Pattern.compile("\\bfragment\\s+\\w+\\s+(\\w+)\\s*\\(");
 	private static final Method ADD_TO_BIND_GROUP_METHOD = lookupAddToBindGroupMethod();
@@ -276,7 +277,7 @@ final class MetalCrossShaderCompiler {
 					"spvc_compiler_options_set_uint(MSL_PLATFORM)"
 				);
 				checkSpvc(
-					Spvc.spvc_compiler_options_set_uint(options, Spvc.SPVC_COMPILER_OPTION_MSL_VERSION, 0x020400),
+					Spvc.spvc_compiler_options_set_uint(options, Spvc.SPVC_COMPILER_OPTION_MSL_VERSION, MSL_VERSION_4_0),
 					"spvc_compiler_options_set_uint(MSL_VERSION)"
 				);
 				checkSpvc(

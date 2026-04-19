@@ -48,7 +48,7 @@ public final class MetalCocoaBootstrap {
 		COERCING_CLIENT.send(cocoaView, "setWantsLayer:", true);
 		RAW_CLIENT.send(cocoaView, "setLayer:", metalLayer);
 		RAW_CLIENT.send(metalLayer, "setDevice:", device);
-		COERCING_CLIENT.send(metalLayer, "setFramebufferOnly:", false);
+		COERCING_CLIENT.send(metalLayer, "setFramebufferOnly:", true);
 		COERCING_CLIENT.send(metalLayer, "setOpaque:", true);
 		COERCING_CLIENT.send(metalLayer, "setContentsScale:", scale);
 

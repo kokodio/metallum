@@ -4,7 +4,15 @@
 # against bad commits.
 
 name: build
-on: [pull_request, push]
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -28,3 +36,50 @@ jobs:
         with:
           name: metallum
           path: build/libs/
+
+  publish:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v6
+
+      - name: download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: metallum
+          path: release-artifacts
+
+      - name: resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          MAIN_JAR="$(find release-artifacts -maxdepth 1 -type f -name '*.jar' ! -name '*-dev.jar' ! -name '*-sources.jar' | head -n1)"
+          if [ -z "${MAIN_JAR}" ]; then
+            echo "Could not find main release jar in release-artifacts" >&2
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "main_jar=${MAIN_JAR}" >> "$GITHUB_OUTPUT"
+
+      - name: publish to Modrinth
+        uses: cloudnode-pro/modrinth-publish@v2
+        with:
+          token: ${{ secrets.MODRINTH_TOKEN }}
+          project: w79ASAJD
+          version: ${{ steps.meta.outputs.version }}
+          channel: alpha
+          loaders: fabric
+          game-versions: 26.2-snapshot-3
+          files: ${{ steps.meta.outputs.main_jar }}
+
+      - name: create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: release-artifacts/*

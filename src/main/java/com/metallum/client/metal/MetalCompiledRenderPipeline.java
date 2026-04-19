@@ -7,6 +7,7 @@ import com.sun.jna.Pointer;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.Nullable;
@@ -44,6 +45,10 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline {
 	private final long[] vertexAttributeFormats;
 	private final long[] vertexAttributeOffsets;
 	private final long vertexStride;
+	private final long depthCompareOp;
+	private final int depthWrite;
+	private final double depthBiasScaleFactor;
+	private final double depthBiasConstant;
 	private final Map<PipelineVariantKey, Pointer> nativePipelines = new ConcurrentHashMap<>();
 
 	MetalCompiledRenderPipeline(
@@ -77,13 +82,29 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline {
 		this.bufferBindingCount = maxBufferBinding + 1;
 		this.textureBindingCount = maxTextureBinding + 1;
 		if (valid) {
-			this.vertexAttributeFormats = MetalCommandEncoder.vertexAttributeFormats(info.getVertexFormat());
-			this.vertexAttributeOffsets = MetalCommandEncoder.vertexAttributeOffsets(info.getVertexFormat());
+			this.vertexAttributeFormats = MetalPipelineSupport.vertexAttributeFormats(info.getVertexFormat());
+			this.vertexAttributeOffsets = MetalPipelineSupport.vertexAttributeOffsets(info.getVertexFormat());
 			this.vertexStride = info.getVertexFormat().getVertexSize();
+			var depthStencilState = info.getDepthStencilState();
+			if (depthStencilState == null) {
+				this.depthCompareOp = 1L;
+				this.depthWrite = 0;
+				this.depthBiasScaleFactor = 0.0;
+				this.depthBiasConstant = 0.0;
+			} else {
+				this.depthCompareOp = MetalPipelineSupport.toCompareOpCode(depthStencilState.depthTest());
+				this.depthWrite = depthStencilState.writeDepth() ? 1 : 0;
+				this.depthBiasScaleFactor = depthStencilState.depthBiasScaleFactor();
+				this.depthBiasConstant = depthStencilState.depthBiasConstant();
+			}
 		} else {
 			this.vertexAttributeFormats = new long[0];
 			this.vertexAttributeOffsets = new long[0];
 			this.vertexStride = 0L;
+			this.depthCompareOp = 1L;
+			this.depthWrite = 0;
+			this.depthBiasScaleFactor = 0.0;
+			this.depthBiasConstant = 0.0;
 		}
 	}
 
@@ -153,6 +174,22 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline {
 		return this.vertexStride;
 	}
 
+	long depthCompareOp() {
+		return this.depthCompareOp;
+	}
+
+	int depthWrite() {
+		return this.depthWrite;
+	}
+
+	double depthBiasScaleFactor() {
+		return this.depthBiasScaleFactor;
+	}
+
+	double depthBiasConstant() {
+		return this.depthBiasConstant;
+	}
+
 	int nativePipelineCount() {
 		return this.nativePipelines.size();
 	}
@@ -198,12 +235,12 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline {
 			this.vertexAttributeOffsets,
 			this.vertexAttributeFormats.length,
 			blendFunction.isPresent() ? 1 : 0,
-			blendFunction.isPresent() ? MetalCommandEncoder.toBlendFactorCode(blendFunction.get().color().sourceFactor()) : 0L,
-			blendFunction.isPresent() ? MetalCommandEncoder.toBlendFactorCode(blendFunction.get().color().destFactor()) : 0L,
-			blendFunction.isPresent() ? MetalCommandEncoder.toBlendOpCode(blendFunction.get().color().op()) : 0L,
-			blendFunction.isPresent() ? MetalCommandEncoder.toBlendFactorCode(blendFunction.get().alpha().sourceFactor()) : 0L,
-			blendFunction.isPresent() ? MetalCommandEncoder.toBlendFactorCode(blendFunction.get().alpha().destFactor()) : 0L,
-			blendFunction.isPresent() ? MetalCommandEncoder.toBlendOpCode(blendFunction.get().alpha().op()) : 0L,
+			blendFunction.isPresent() ? MetalPipelineSupport.toBlendFactorCode(blendFunction.get().color().sourceFactor()) : 0L,
+			blendFunction.isPresent() ? MetalPipelineSupport.toBlendFactorCode(blendFunction.get().color().destFactor()) : 0L,
+			blendFunction.isPresent() ? MetalPipelineSupport.toBlendOpCode(blendFunction.get().color().op()) : 0L,
+			blendFunction.isPresent() ? MetalPipelineSupport.toBlendFactorCode(blendFunction.get().alpha().sourceFactor()) : 0L,
+			blendFunction.isPresent() ? MetalPipelineSupport.toBlendFactorCode(blendFunction.get().alpha().destFactor()) : 0L,
+			blendFunction.isPresent() ? MetalPipelineSupport.toBlendOpCode(blendFunction.get().alpha().op()) : 0L,
 			colorTarget.writeMask()
 		);
 		if (MetalProbe.isNullPointer(created)) {

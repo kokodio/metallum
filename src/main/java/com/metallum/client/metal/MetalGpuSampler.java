@@ -36,9 +36,9 @@ final class MetalGpuSampler extends GpuSampler {
 			toMtlAddressMode(addressModeV),
 			toMtlMinMagFilter(minFilter),
 			toMtlMinMagFilter(magFilter),
-			toMtlMipFilter(minFilter, maxLod),
+			toMtlMipFilter(maxLod),
 			Math.max(1, maxAnisotropy),
-			maxLod.orElse(Double.MAX_VALUE)
+			toMtlMaxLodClamp(maxLod)
 		);
 		this.addressModeU = addressModeU;
 		this.addressModeV = addressModeV;
@@ -109,14 +109,11 @@ final class MetalGpuSampler extends GpuSampler {
 		};
 	}
 
-	private static long toMtlMipFilter(final FilterMode minFilter, final OptionalDouble maxLod) {
-		if (maxLod.isPresent() && maxLod.getAsDouble() <= 0.0) {
-			return 0L; // MTLSamplerMipFilterNotMipmapped
-		}
+	private static long toMtlMipFilter(final OptionalDouble maxLod) {
+		return maxLod.orElse(1000.0) > 0.25 ? 2L : 1L;
+	}
 
-		return switch (minFilter) {
-			case NEAREST -> 1L;
-			case LINEAR -> 2L;
-		};
+	private static double toMtlMaxLodClamp(final OptionalDouble maxLod) {
+		return Math.max(0.25, maxLod.orElse(1000.0));
 	}
 }

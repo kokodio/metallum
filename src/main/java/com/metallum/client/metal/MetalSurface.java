@@ -59,10 +59,9 @@ final class MetalSurface implements GpuSurfaceBackend {
 		if (this.configuration == null) {
 			throw new SurfaceException("Metal surface must be configured before acquire");
 		}
-		this.currentDrawable = MetalNativeBridge.INSTANCE.metallum_acquire_next_drawable(this.bootstrap.metalLayer());
-		if (MetalProbe.isNullPointer(this.currentDrawable)) {
+		if (this.currentDrawable != null) {
+			MetalNativeBridge.INSTANCE.metallum_release_object(this.currentDrawable);
 			this.currentDrawable = null;
-			throw new SurfaceException("Failed to acquire CAMetalDrawable");
 		}
 		this.blittedToDrawable = false;
 	}
@@ -70,7 +69,11 @@ final class MetalSurface implements GpuSurfaceBackend {
 	@Override
 	public void blitFromTexture(final CommandEncoderBackend commandEncoder, final GpuTextureView textureView) {
 		if (this.currentDrawable == null) {
-			throw new IllegalStateException("Cannot blit to a Metal surface without an acquired drawable");
+			this.currentDrawable = MetalNativeBridge.INSTANCE.metallum_acquire_next_drawable(this.bootstrap.metalLayer());
+			if (MetalProbe.isNullPointer(this.currentDrawable)) {
+				this.currentDrawable = null;
+				throw new IllegalStateException("Failed to acquire CAMetalDrawable for Metal blit");
+			}
 		}
 
 		MetalGpuTexture source = (MetalGpuTexture)textureView.texture();

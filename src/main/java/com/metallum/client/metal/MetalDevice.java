@@ -96,7 +96,7 @@ final class MetalDevice implements GpuDeviceBackend {
 		final int depthOrLayers,
 		final int mipLevels
 	) {
-		return this.createTexture(label == null ? null : label.get(), usage, format, width, height, depthOrLayers, mipLevels);
+		return this.createTexture(this.resolveDebugLabel(label), usage, format, width, height, depthOrLayers, mipLevels);
 	}
 
 	@Override
@@ -124,7 +124,7 @@ final class MetalDevice implements GpuDeviceBackend {
 
 	@Override
 	public GpuBuffer createBuffer(@Nullable final Supplier<String> label, @GpuBuffer.Usage final int usage, final long size) {
-		return new MetalGpuBuffer(this, label == null ? null : label.get(), usage, size);
+		return new MetalGpuBuffer(this, this.resolveDebugLabel(label), usage, size);
 	}
 
 	@Override
@@ -142,6 +142,10 @@ final class MetalDevice implements GpuDeviceBackend {
 	@Override
 	public boolean isDebuggingEnabled() {
 		return this.debugOptions.logLevel() > 0 || this.debugOptions.useLabels() || this.debugOptions.useValidationLayers();
+	}
+
+	boolean useLabels() {
+		return this.debugOptions.useLabels();
 	}
 
 	@Override
@@ -282,5 +286,10 @@ final class MetalDevice implements GpuDeviceBackend {
 	private static boolean readBoolean(final com.sun.jna.Pointer receiver, final String selector) {
 		Object value = COERCING_CLIENT.send(receiver, selector);
 		return value instanceof Boolean bool && bool;
+	}
+
+	@Nullable
+	private String resolveDebugLabel(@Nullable final Supplier<String> label) {
+		return this.useLabels() && label != null ? label.get() : null;
 	}
 }

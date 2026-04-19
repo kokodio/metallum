@@ -43,17 +43,17 @@ tasks.register("buildMacNative", Exec) {
 		file("src/main/resources/natives/macos").mkdirs()
 	}
 
-	commandLine "clang",
-		"-dynamiclib",
-		"-fobjc-arc",
-		"-mmacosx-version-min=13.0",
-		"-arch", "arm64",
-		"-arch", "x86_64",
+	commandLine "swiftc",
+		"-O",
+		"-whole-module-optimization",
+		"-emit-library",
+		"-module-name", "metallum_native",
+		"-target", "arm64-apple-macosx14.0",
 		"-framework", "Foundation",
 		"-framework", "Metal",
 		"-framework", "QuartzCore",
 		"-o", "src/main/resources/natives/macos/libmetallum.dylib",
-		"src/main/native/metallum_native.m"
+		"src/main/native/MetallumNative.swift"
 }
 
 tasks.named("processResources") {

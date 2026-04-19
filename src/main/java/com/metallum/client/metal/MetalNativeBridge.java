@@ -66,6 +66,7 @@ final class MetalNativeBridge {
 	private final MethodHandle clearTexture;
 	private final MethodHandle clearColorTextureRegion;
 	private final MethodHandle clearColorDepthTextures;
+	private final MethodHandle clearColorDepthTexturesRegion;
 	private final MethodHandle getBufferContents;
 
 	private MetalNativeBridge(final Arena libraryArena, final SymbolLookup lookup) {
@@ -173,6 +174,11 @@ final class MetalNativeBridge {
 			lookup,
 			"metallum_clear_color_depth_textures",
 			FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, ValueLayout.ADDRESS, DOUBLE)
+		);
+		this.clearColorDepthTexturesRegion = downcall(
+			lookup,
+			"metallum_clear_color_depth_textures_region",
+			FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, ValueLayout.ADDRESS, DOUBLE, INT, INT, INT, INT)
 		);
 		this.getBufferContents = downcall(lookup, "metallum_get_buffer_contents", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 	}
@@ -783,6 +789,34 @@ final class MetalNativeBridge {
 			);
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_clear_color_depth_textures", throwable);
+		}
+	}
+
+	int metallum_clear_color_depth_textures_region(
+		final Pointer commandQueue,
+		final Pointer colorTexture,
+		final int clearColor,
+		final Pointer depthTexture,
+		final double clearDepth,
+		final int x,
+		final int y,
+		final int width,
+		final int height
+	) {
+		try {
+			return (int)this.clearColorDepthTexturesRegion.invokeExact(
+				toSegment(commandQueue),
+				toSegment(colorTexture),
+				clearColor,
+				toSegment(depthTexture),
+				clearDepth,
+				x,
+				y,
+				width,
+				height
+			);
+		} catch (Throwable throwable) {
+			throw bridgeFailure("metallum_clear_color_depth_textures_region", throwable);
 		}
 	}
 
