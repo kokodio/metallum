@@ -1,5 +1,4 @@
 package com.metallum.client.metal;
-
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
@@ -10,13 +9,11 @@ import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderPassBackend;
 import com.mojang.blaze3d.systems.ScissorState;
 import com.mojang.blaze3d.textures.GpuSampler;
-import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.logging.LogUtils;
 import com.sun.jna.Pointer;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
@@ -47,7 +44,7 @@ final class MetalRenderPass implements RenderPassBackend {
 	private final GpuBuffer[] vertexBuffers = new GpuBuffer[MAX_VERTEX_BUFFERS];
 	private final HashMap<String, GpuBufferSlice> uniforms = new HashMap<>();
 	private final HashMap<String, TextureViewAndSampler> samplers = new HashMap<>();
-	private final Set<String> dirtyUniforms = new HashSet<>();
+	private final Set<MetalCompiledRenderPipeline.ResourceBinding> dirtyBindings = new HashSet<>();
 	@Nullable
 	private RenderPipeline pipeline;
 	@Nullable
@@ -98,8 +95,7 @@ final class MetalRenderPass implements RenderPassBackend {
 	@Override
 	public void setPipeline(final RenderPipeline pipeline) {
 		if (this.pipeline != pipeline) {
-			this.dirtyUniforms.addAll(this.uniforms.keySet());
-			this.dirtyUniforms.addAll(this.samplers.keySet());
+			this.dirtyBindings.clear();
 			this.pipelineDirty = true;
 			this.depthStateDirty = true;
 			this.vertexBuffersDirty = true;
@@ -126,7 +122,7 @@ final class MetalRenderPass implements RenderPassBackend {
 			} else {
 				this.samplers.put(name, newValue);
 			}
-			this.dirtyUniforms.add(name);
+			this.markBindingDirty(name);
 		}
 	}
 
@@ -139,7 +135,7 @@ final class MetalRenderPass implements RenderPassBackend {
 	public void setUniform(final String name, final GpuBufferSlice value) {
 		GpuBufferSlice oldValue = this.uniforms.put(name, value);
 		if (!sameSlice(oldValue, value)) {
-			this.dirtyUniforms.add(name);
+			this.markBindingDirty(name);
 		}
 	}
 
@@ -188,45 +184,16 @@ final class MetalRenderPass implements RenderPassBackend {
 
 	@Override
 	public void drawIndexed(final int baseVertex, final int firstIndex, final int indexCount, final int instanceCount) {
-		if (VALIDATION) {
-			this.validateDrawState(Collections.emptyList());
-		}
-
 		MetalGpuTexture colorAttachment = MetalCommandEncoder.castTexture(this.colorTexture.texture());
 		MetalGpuBuffer nativeVertexBuffer = this.resolveVertexBuffer();
 		MetalGpuBuffer nativeIndexBuffer = this.resolveIndexBuffer();
-		long primitiveType = MetalPipelineSupport.primitiveTypeCode(this.pipeline.getVertexFormatMode());
-		if (primitiveType < 0L) {
-			throw new IllegalStateException("Unsupported primitive type: " + this.pipeline.getVertexFormatMode());
-		}
-
 		Pointer renderPass = this.getOrCreateNativeRenderPass();
 		if (MetalProbe.isNullPointer(renderPass)) {
 			throw new IllegalStateException("Native render pass is unavailable");
 		}
 
 		this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer, nativeIndexBuffer, this.indexType, true);
-
-		int safeInstanceCount = Math.max(1, instanceCount);
-		int result = primitiveType == MetalPipelineSupport.TRIANGLE_FAN_PRIMITIVE
-			? MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed_triangle_fan(
-				renderPass,
-				(long)firstIndex * (this.indexType == VertexFormat.IndexType.INT ? 4L : 2L),
-				indexCount,
-				baseVertex,
-				safeInstanceCount
-			)
-			: MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed(
-				renderPass,
-				primitiveType,
-				(long)firstIndex * (this.indexType == VertexFormat.IndexType.INT ? 4L : 2L),
-				indexCount,
-				baseVertex,
-				safeInstanceCount
-			);
-		if (result != 0) {
-			throw new IllegalStateException("Native draw failed with code " + result);
-		}
+		this.drawIndexedNative(renderPass, firstIndex, indexCount, baseVertex, instanceCount, this.indexType);
 	}
 
 	@Override
@@ -237,43 +204,35 @@ final class MetalRenderPass implements RenderPassBackend {
 		final Collection<String> dynamicUniforms,
 		final T uniformArgument
 	) {
-		if (VALIDATION) {
-			this.validateDrawState(dynamicUniforms);
-		}
-
 		VertexFormat.IndexType fallbackIndexType = defaultIndexType == null ? VertexFormat.IndexType.SHORT : defaultIndexType;
-		GpuBuffer lastIndexBuffer = null;
-		VertexFormat.IndexType lastIndexType = null;
-		GpuBuffer lastVertexBuffer = null;
+		MetalGpuTexture colorAttachment = MetalCommandEncoder.castTexture(this.colorTexture.texture());
+		Pointer renderPass = this.getOrCreateNativeRenderPass();
+		if (MetalProbe.isNullPointer(renderPass)) {
+			throw new IllegalStateException("Native render pass is unavailable");
+		}
 
 		for (RenderPass.Draw<T> draw : draws) {
 			VertexFormat.IndexType drawIndexType = draw.indexType() == null ? fallbackIndexType : draw.indexType();
 			GpuBuffer currentIndexBuffer = draw.indexBuffer() == null ? defaultIndexBuffer : draw.indexBuffer();
 
-			if (currentIndexBuffer != lastIndexBuffer || drawIndexType != lastIndexType) {
-				this.setIndexBuffer(currentIndexBuffer, drawIndexType);
-				lastIndexBuffer = currentIndexBuffer;
-				lastIndexType = drawIndexType;
-			}
-
-			if (draw.vertexBuffer() != lastVertexBuffer) {
-				this.setVertexBuffer(0, draw.vertexBuffer());
-				lastVertexBuffer = draw.vertexBuffer();
-			}
+			this.setIndexBuffer(currentIndexBuffer, drawIndexType);
+			this.setVertexBuffer(0, draw.vertexBuffer());
 
 			if (draw.uniformUploaderConsumer() != null) {
 				draw.uniformUploaderConsumer().accept(uniformArgument, this::setUniform);
 			}
 
-			this.drawIndexed(draw.baseVertex(), draw.firstIndex(), draw.indexCount(), 1);
+			if (this.needsDrawStateBinding(true)) {
+				MetalGpuBuffer nativeVertexBuffer = this.resolveVertexBuffer();
+				MetalGpuBuffer nativeIndexBuffer = this.resolveIndexBuffer();
+				this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer, nativeIndexBuffer, drawIndexType, true);
+			}
+			this.drawIndexedNative(renderPass, draw.firstIndex(), draw.indexCount(), draw.baseVertex(), 1, drawIndexType);
 		}
 	}
 
 	@Override
 	public void draw(final int firstVertex, final int vertexCount) {
-		if (VALIDATION) {
-			this.validateDrawState(Collections.emptyList());
-		}
 		MetalGpuTexture colorAttachment = MetalCommandEncoder.castTexture(this.colorTexture.texture());
 		MetalGpuBuffer nativeVertexBuffer = this.resolveVertexBuffer();
 		long primitiveType = MetalPipelineSupport.primitiveTypeCode(this.pipeline.getVertexFormatMode());
@@ -338,6 +297,10 @@ final class MetalRenderPass implements RenderPassBackend {
 			return this.nativeRenderPass;
 		}
 
+		for (TextureViewAndSampler textureBinding : this.samplers.values()) {
+			this.encoder.flushPendingTextureViewClear(textureBinding.textureView());
+		}
+
 		MetalGpuTextureView colorTextureView = (MetalGpuTextureView)this.colorTexture;
 		MetalGpuTextureView depthTextureView = this.depthTexture == null ? null : (MetalGpuTextureView)this.depthTexture;
 		Pointer handle = MetalNativeBridge.INSTANCE.metallum_begin_render_pass(
@@ -371,32 +334,6 @@ final class MetalRenderPass implements RenderPassBackend {
 		}
 		this.nativeRenderPass = null;
 		this.nativePipeline = null;
-	}
-
-	private void validateDrawState(final Collection<String> dynamicUniforms) {
-		if (this.pipeline == null) {
-			throw new IllegalStateException("Can't draw without a render pipeline");
-		}
-		if (this.compiledPipeline == null || !this.compiledPipeline.isValid()) {
-			throw new IllegalStateException("Pipeline is missing or not valid");
-		}
-		if (this.compiledPipeline.vertexMsl() == null
-			|| this.compiledPipeline.fragmentMsl() == null
-			|| this.compiledPipeline.vertexEntryPoint() == null
-			|| this.compiledPipeline.fragmentEntryPoint() == null) {
-			throw new IllegalStateException("Pipeline shader source is missing");
-		}
-
-		for (var entry : this.uniforms.entrySet()) {
-			String uniformName = entry.getKey();
-			GpuBufferSlice uniformSlice = entry.getValue();
-			if (uniformSlice == null || dynamicUniforms.contains(uniformName)) {
-				continue;
-			}
-			if (uniformSlice.buffer().isClosed()) {
-				throw new IllegalStateException("Uniform " + uniformName + " buffer has been closed");
-			}
-		}
 	}
 
 	@Nullable
@@ -435,6 +372,39 @@ final class MetalRenderPass implements RenderPassBackend {
 		return MetalCommandEncoder.castBuffer(this.indexBuffer);
 	}
 
+	private void drawIndexedNative(
+		final Pointer renderPass,
+		final int firstIndex,
+		final int indexCount,
+		final int baseVertex,
+		final int instanceCount,
+		final VertexFormat.IndexType indexType
+	) {
+		long primitiveType = MetalPipelineSupport.primitiveTypeCode(this.pipeline.getVertexFormatMode());
+		if (primitiveType < 0L) {
+			throw new IllegalStateException("Unsupported primitive type: " + this.pipeline.getVertexFormatMode());
+		}
+
+		int safeInstanceCount = Math.max(1, instanceCount);
+		long indexOffsetBytes = (long)firstIndex * (indexType == VertexFormat.IndexType.INT ? 4L : 2L);
+		int result = primitiveType == MetalPipelineSupport.TRIANGLE_FAN_PRIMITIVE
+			? MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed_triangle_fan(renderPass, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount)
+			: MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed(renderPass, primitiveType, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount);
+		if (result != 0) {
+			throw new IllegalStateException("Native draw failed with code " + result);
+		}
+	}
+
+	private boolean needsDrawStateBinding(final boolean indexed) {
+		return this.pipelineDirty
+			|| this.depthStateDirty
+			|| this.vertexBuffersDirty
+			|| this.scissorDirty
+			|| !this.dirtyBindings.isEmpty()
+			|| MetalProbe.isNullPointer(this.nativePipeline)
+			|| indexed && this.indexBufferDirty;
+	}
+
 	private void bindDrawState(
 		final Pointer renderPass,
 		final MetalGpuTexture colorAttachment,
@@ -447,18 +417,21 @@ final class MetalRenderPass implements RenderPassBackend {
 			throw new IllegalStateException("Pipeline is missing");
 		}
 
-		RenderPipeline pipelineInfo = this.compiledPipeline.info();
-		Pointer pipelineHandle = this.compiledPipeline.getOrCreateNativePipeline(
-			this.device,
-			this.colorAttachmentFormat(),
-			this.depthAttachmentFormat(),
-			this.stencilAttachmentFormat()
-		);
-		if (MetalProbe.isNullPointer(pipelineHandle)) {
-			throw new IllegalStateException("Native pipeline is unavailable");
+		Pointer pipelineHandle = this.nativePipeline;
+		boolean reboundPipeline = this.pipelineDirty;
+		if (reboundPipeline || MetalProbe.isNullPointer(pipelineHandle)) {
+			pipelineHandle = this.compiledPipeline.getOrCreateNativePipeline(
+				this.device,
+				this.colorAttachmentFormat(),
+				this.depthAttachmentFormat(),
+				this.stencilAttachmentFormat()
+			);
+			if (MetalProbe.isNullPointer(pipelineHandle)) {
+				throw new IllegalStateException("Native pipeline is unavailable");
+			}
+			reboundPipeline = this.pipelineDirty || !MetalPipelineSupport.samePointer(this.nativePipeline, pipelineHandle);
 		}
 
-		boolean reboundPipeline = this.pipelineDirty || !MetalPipelineSupport.samePointer(this.nativePipeline, pipelineHandle);
 		if (reboundPipeline) {
 			int result = MetalNativeBridge.INSTANCE.metallum_render_pass_set_pipeline(renderPass, pipelineHandle);
 			if (result != 0) {
@@ -483,6 +456,7 @@ final class MetalRenderPass implements RenderPassBackend {
 		}
 
 		if (reboundPipeline) {
+			RenderPipeline pipelineInfo = this.compiledPipeline.info();
 			int result = MetalNativeBridge.INSTANCE.metallum_render_pass_set_raster_state(
 				renderPass,
 				pipelineInfo.isCull() ? 1 : 0,
@@ -523,10 +497,6 @@ final class MetalRenderPass implements RenderPassBackend {
 		}
 
 		if (indexed && (reboundPipeline || this.indexBufferDirty)) {
-			if (indexType == null) {
-				throw new IllegalStateException("Indexed draw requires an index type");
-			}
-
 			int result = MetalNativeBridge.INSTANCE.metallum_render_pass_set_index_buffer(
 				renderPass,
 				nativeIndexBuffer == null ? null : nativeIndexBuffer.nativeHandle(),
@@ -547,24 +517,32 @@ final class MetalRenderPass implements RenderPassBackend {
 		}
 
 		if (!bindAll) {
-			if (this.dirtyUniforms.isEmpty()) {
+			if (this.dirtyBindings.isEmpty()) {
 				return;
 			}
 
-			for (String dirtyName : this.dirtyUniforms) {
-				MetalCompiledRenderPipeline.ResourceBinding binding = this.compiledPipeline.resource(dirtyName);
-				if (binding != null) {
-					this.pushDescriptor(renderPass, colorAttachment, binding);
-				}
+			for (MetalCompiledRenderPipeline.ResourceBinding binding : this.dirtyBindings) {
+				this.pushDescriptor(renderPass, colorAttachment, binding);
 			}
-			this.dirtyUniforms.clear();
+			this.dirtyBindings.clear();
 			return;
 		}
 
 		for (MetalCompiledRenderPipeline.ResourceBinding binding : this.compiledPipeline.resources()) {
 			this.pushDescriptor(renderPass, colorAttachment, binding);
 		}
-		this.dirtyUniforms.clear();
+		this.dirtyBindings.clear();
+	}
+
+	private void markBindingDirty(final String name) {
+		if (this.compiledPipeline == null) {
+			return;
+		}
+
+		MetalCompiledRenderPipeline.ResourceBinding binding = this.compiledPipeline.resource(name);
+		if (binding != null) {
+			this.dirtyBindings.add(binding);
+		}
 	}
 
 	private void pushDescriptor(

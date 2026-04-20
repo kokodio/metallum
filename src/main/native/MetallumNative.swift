@@ -6,17 +6,13 @@ import simd
 private let metallumVertexBufferSlot = 30
 private let metallumMaxSubmitsInFlight = 2
 
-private struct MetallumGuiUniforms {
+private struct MetallumFullscreenUniforms {
     var viewportSize: SIMD2<Float>
-}
-
-private struct MetallumGuiVertex {
-    var x: Float
-    var y: Float
     var z: Float
-    var color: UInt32
-    var u: Float
-    var v: Float
+    var _padding0: Float
+    var color: SIMD4<Float>
+    var uvMin: SIMD2<Float>
+    var uvMax: SIMD2<Float>
 }
 
 private struct DynamicPipelineKey: Hashable {
@@ -113,6 +109,7 @@ private enum NativeState {
     static var submitTrackers: [UInt: SubmitTracker] = [:]
     static var clearPipelines: [PipelineVariantKey: MTLRenderPipelineState] = [:]
     static var presentPipelines: [PipelineVariantKey: MTLRenderPipelineState] = [:]
+    static var presentNearestSamplers: [UInt: MTLSamplerState] = [:]
     static var presentLinearSamplers: [UInt: MTLSamplerState] = [:]
 }
 
@@ -339,34 +336,52 @@ private func clearColorFromARGB(_ argb: Int32) -> MTLClearColor {
     return MTLClearColor(red: red, green: green, blue: blue, alpha: alpha)
 }
 
-private func guiVertex(_ x: Float, _ y: Float, _ z: Float, _ u: Float, _ v: Float) -> MetallumGuiVertex {
-    MetallumGuiVertex(x: x, y: y, z: z, color: 0xFFFFFFFF, u: u, v: v)
+private func colorVectorFromARGB(_ argb: Int32) -> SIMD4<Float> {
+    SIMD4<Float>(
+        Float((argb >> 16) & 0xFF) / 255.0,
+        Float((argb >> 8) & 0xFF) / 255.0,
+        Float(argb & 0xFF) / 255.0,
+        Float((argb >> 24) & 0xFF) / 255.0
+    )
 }
 
 private func guiMslSource() -> String {
     """
     #include <metal_stdlib>
     using namespace metal;
-    struct VertexIn {
-      float3 position [[attribute(0)]];
-      float4 color [[attribute(1)]];
-      float2 uv [[attribute(2)]];
-    };
-    struct GuiUniforms {
+    struct FullscreenUniforms {
       float2 viewportSize;
+      float z;
+      float _padding0;
+      float4 color;
+      float2 uvMin;
+      float2 uvMax;
     };
     struct VertexOut {
       float4 position [[position]];
       float4 color;
       float2 uv;
     };
-    vertex VertexOut metallum_gui_vs(VertexIn in [[stage_in]], constant GuiUniforms& u [[buffer(1)]]) {
+    vertex VertexOut metallum_fullscreen_vs(uint vertexId [[vertex_id]], constant FullscreenUniforms& u [[buffer(1)]]) {
+      const float2 positions[4] = {
+        float2(0.0, 0.0),
+        float2(u.viewportSize.x, 0.0),
+        float2(0.0, u.viewportSize.y),
+        float2(u.viewportSize.x, u.viewportSize.y)
+      };
+      const float2 uvs[4] = {
+        float2(u.uvMin.x, u.uvMin.y),
+        float2(u.uvMax.x, u.uvMin.y),
+        float2(u.uvMin.x, u.uvMax.y),
+        float2(u.uvMax.x, u.uvMax.y)
+      };
       VertexOut out;
-      float x = (in.position.x / max(u.viewportSize.x, 1.0)) * 2.0 - 1.0;
-      float y = 1.0 - (in.position.y / max(u.viewportSize.y, 1.0)) * 2.0;
-      out.position = float4(x, y, in.position.z, 1.0);
-      out.color = in.color;
-      out.uv = in.uv;
+      float2 position = positions[vertexId & 3];
+      float x = (position.x / max(u.viewportSize.x, 1.0)) * 2.0 - 1.0;
+      float y = 1.0 - (position.y / max(u.viewportSize.y, 1.0)) * 2.0;
+      out.position = float4(x, y, u.z, 1.0);
+      out.color = u.color;
+      out.uv = uvs[vertexId & 3];
       return out;
     }
     fragment float4 metallum_gui_fs_textured(VertexOut in [[stage_in]], texture2d<float> tex [[texture(0)]], sampler smp [[sampler(0)]]) {
@@ -468,18 +483,6 @@ private func queueDrawablePresent(_ queue: MTLCommandQueue, _ drawable: CAMetalD
 private func signalSubmit(_ queue: MTLCommandQueue, submitIndex: UInt64) -> Int32 {
     let tracker = submitTracker(for: queue)
 
-    while true {
-        var oldest: MTLCommandBuffer?
-        tracker.condition.lock()
-        if tracker.inFlightMarkers.count < metallumMaxSubmitsInFlight {
-            tracker.condition.unlock()
-            break
-        }
-        oldest = tracker.inFlightMarkers.first?.commandBuffer
-        tracker.condition.unlock()
-        oldest?.waitUntilCompleted()
-    }
-
     guard let commandBuffer = takeSubmissionCommandBufferForSubmit(queue) else {
         return 1
     }
@@ -537,7 +540,7 @@ private func buildGuiPipeline(device: MTLDevice, textured: Bool, colorFormat: MT
     do {
         let library = try device.makeLibrary(source: guiMslSource(), options: nil)
         guard
-            let vertexFunction = library.makeFunction(name: "metallum_gui_vs"),
+            let vertexFunction = library.makeFunction(name: "metallum_fullscreen_vs"),
             let fragmentFunction = library.makeFunction(name: textured ? "metallum_gui_fs_textured" : "metallum_gui_fs_color")
         else {
             NSLog("[metallum] Failed to create GUI shader functions")
@@ -559,20 +562,6 @@ private func buildGuiPipeline(device: MTLDevice, textured: Bool, colorFormat: MT
             descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         }
 
-        let vertexDescriptor = MTLVertexDescriptor()
-        vertexDescriptor.attributes[0].format = .float3
-        vertexDescriptor.attributes[0].offset = 0
-        vertexDescriptor.attributes[0].bufferIndex = 0
-        vertexDescriptor.attributes[1].format = .uchar4Normalized
-        vertexDescriptor.attributes[1].offset = 12
-        vertexDescriptor.attributes[1].bufferIndex = 0
-        vertexDescriptor.attributes[2].format = .float2
-        vertexDescriptor.attributes[2].offset = 16
-        vertexDescriptor.attributes[2].bufferIndex = 0
-        vertexDescriptor.layouts[0].stride = 24
-        vertexDescriptor.layouts[0].stepFunction = .perVertex
-        descriptor.vertexDescriptor = vertexDescriptor
-
         return try device.makeRenderPipelineState(descriptor: descriptor)
     } catch {
         NSLog("[metallum] Failed to create GUI render pipeline: %@", String(describing: error))
@@ -588,7 +577,7 @@ private func buildPresentPipeline(device: MTLDevice, colorFormat: MTLPixelFormat
     do {
         let library = try device.makeLibrary(source: guiMslSource(), options: nil)
         guard
-            let vertexFunction = library.makeFunction(name: "metallum_gui_vs"),
+            let vertexFunction = library.makeFunction(name: "metallum_fullscreen_vs"),
             let fragmentFunction = library.makeFunction(name: "metallum_gui_fs_textured")
         else {
             NSLog("[metallum] Failed to create present shader functions")
@@ -600,20 +589,6 @@ private func buildPresentPipeline(device: MTLDevice, colorFormat: MTLPixelFormat
         descriptor.fragmentFunction = fragmentFunction
         descriptor.colorAttachments[0].pixelFormat = colorFormat
         descriptor.colorAttachments[0].isBlendingEnabled = false
-
-        let vertexDescriptor = MTLVertexDescriptor()
-        vertexDescriptor.attributes[0].format = .float3
-        vertexDescriptor.attributes[0].offset = 0
-        vertexDescriptor.attributes[0].bufferIndex = 0
-        vertexDescriptor.attributes[1].format = .uchar4Normalized
-        vertexDescriptor.attributes[1].offset = 12
-        vertexDescriptor.attributes[1].bufferIndex = 0
-        vertexDescriptor.attributes[2].format = .float2
-        vertexDescriptor.attributes[2].offset = 16
-        vertexDescriptor.attributes[2].bufferIndex = 0
-        vertexDescriptor.layouts[0].stride = 24
-        vertexDescriptor.layouts[0].stepFunction = .perVertex
-        descriptor.vertexDescriptor = vertexDescriptor
 
         return try device.makeRenderPipelineState(descriptor: descriptor)
     } catch {
@@ -637,6 +612,26 @@ private func ensurePresentLinearSampler(_ device: MTLDevice) -> MTLSamplerState?
         let sampler = device.makeSamplerState(descriptor: descriptor)
         if let sampler {
             NativeState.presentLinearSamplers[key] = sampler
+        }
+        return sampler
+    }
+}
+
+private func ensurePresentNearestSampler(_ device: MTLDevice) -> MTLSamplerState? {
+    let key = objectAddress(device)
+    return withGlobalLock {
+        if let cached = NativeState.presentNearestSamplers[key] {
+            return cached
+        }
+        let descriptor = MTLSamplerDescriptor()
+        descriptor.minFilter = .nearest
+        descriptor.magFilter = .nearest
+        descriptor.mipFilter = .notMipmapped
+        descriptor.sAddressMode = .clampToEdge
+        descriptor.tAddressMode = .clampToEdge
+        let sampler = device.makeSamplerState(descriptor: descriptor)
+        if let sampler {
+            NativeState.presentNearestSamplers[key] = sampler
         }
         return sampler
     }
@@ -1593,6 +1588,8 @@ public func metallum_configure_layer(_ layerPtr: UnsafeMutableRawPointer?, _ wid
     }
     layer.pixelFormat = .bgra8Unorm
     layer.drawableSize = CGSize(width: width, height: height)
+    layer.allowsNextDrawableTimeout = false
+    layer.presentsWithTransaction = false
     layer.displaySyncEnabled = immediatePresentMode == 0
     return 0
 }
@@ -1635,23 +1632,23 @@ public func metallum_copy_texture_to_drawable(
 
     let w = Float(drawable.texture.width)
     let h = Float(drawable.texture.height)
-    let fullscreenVertices = [
-        guiVertex(0.0, 0.0, 0.0, 0.0, 1.0),
-        guiVertex(w, 0.0, 0.0, 1.0, 1.0),
-        guiVertex(0.0, h, 0.0, 0.0, 0.0),
-        guiVertex(w, h, 0.0, 1.0, 0.0)
-    ]
-    var uniforms = MetallumGuiUniforms(viewportSize: SIMD2<Float>(w, h))
+    var uniforms = MetallumFullscreenUniforms(
+        viewportSize: SIMD2<Float>(w, h),
+        z: 0.0,
+        _padding0: 0.0,
+        color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0),
+        uvMin: SIMD2<Float>(0.0, 1.0),
+        uvMax: SIMD2<Float>(1.0, 0.0)
+    )
 
     encoder.setRenderPipelineState(pipeline)
-    fullscreenVertices.withUnsafeBytes { bytes in
-        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 0)
-    }
     withUnsafeBytes(of: &uniforms) { bytes in
         encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
     }
     encoder.setFragmentTexture(sourceTexture, index: 0)
-    if let sampler = ensurePresentLinearSampler(queue.device) {
+    let requiresScaling = sourceTexture.width != drawable.texture.width || sourceTexture.height != drawable.texture.height
+    let sampler = requiresScaling ? ensurePresentLinearSampler(queue.device) : ensurePresentNearestSampler(queue.device)
+    if let sampler {
         encoder.setFragmentSamplerState(sampler, index: 0)
     }
     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -1664,10 +1661,17 @@ public func metallum_copy_texture_to_drawable(
 
 @_cdecl("metallum_present_drawable")
 public func metallum_present_drawable(_ commandQueuePtr: UnsafeMutableRawPointer?, _ drawablePtr: UnsafeMutableRawPointer?) -> Int32 {
-    guard let queue: MTLCommandQueue = object(commandQueuePtr), let drawable: CAMetalDrawable = object(drawablePtr) else {
+    guard let drawablePtr else {
         return 1
     }
-    return queueDrawablePresent(queue, drawable)
+    guard let queue: MTLCommandQueue = object(commandQueuePtr), let drawable: CAMetalDrawable = object(drawablePtr) else {
+        Unmanaged<AnyObject>.fromOpaque(drawablePtr).release()
+        return 1
+    }
+
+    let result = queueDrawablePresent(queue, drawable)
+    Unmanaged<AnyObject>.fromOpaque(drawablePtr).release()
+    return result
 }
 
 @_cdecl("metallum_release_object")
@@ -1803,19 +1807,16 @@ public func metallum_clear_color_texture_region(
     encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: Double(textureWidth), height: Double(textureHeight), znear: 0.0, zfar: 1.0))
     encoder.setScissorRect(MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY))
 
-    let packedColor = colorFromARGB(clearColor)
-    let fullscreenVertices = [
-        MetallumGuiVertex(x: 0.0, y: 0.0, z: 0.0, color: packedColor, u: 0.0, v: 0.0),
-        MetallumGuiVertex(x: Float(textureWidth), y: 0.0, z: 0.0, color: packedColor, u: 0.0, v: 0.0),
-        MetallumGuiVertex(x: 0.0, y: Float(textureHeight), z: 0.0, color: packedColor, u: 0.0, v: 0.0),
-        MetallumGuiVertex(x: Float(textureWidth), y: Float(textureHeight), z: 0.0, color: packedColor, u: 0.0, v: 0.0)
-    ]
-    var uniforms = MetallumGuiUniforms(viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)))
+    var uniforms = MetallumFullscreenUniforms(
+        viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)),
+        z: 0.0,
+        _padding0: 0.0,
+        color: colorVectorFromARGB(clearColor),
+        uvMin: SIMD2<Float>(0.0, 0.0),
+        uvMax: SIMD2<Float>(0.0, 0.0)
+    )
 
     encoder.setRenderPipelineState(pipeline)
-    fullscreenVertices.withUnsafeBytes { bytes in
-        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 0)
-    }
     withUnsafeBytes(of: &uniforms) { bytes in
         encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
     }
@@ -1936,21 +1937,18 @@ public func metallum_clear_color_depth_textures_region(
     encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: Double(textureWidth), height: Double(textureHeight), znear: 0.0, zfar: 1.0))
     encoder.setScissorRect(MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY))
 
-    let packedColor = colorFromARGB(clearColor)
     let depthValue = Float(max(0.0, min(clearDepth, 1.0)))
-    let fullscreenVertices = [
-        MetallumGuiVertex(x: 0.0, y: 0.0, z: depthValue, color: packedColor, u: 0.0, v: 0.0),
-        MetallumGuiVertex(x: Float(textureWidth), y: 0.0, z: depthValue, color: packedColor, u: 0.0, v: 0.0),
-        MetallumGuiVertex(x: 0.0, y: Float(textureHeight), z: depthValue, color: packedColor, u: 0.0, v: 0.0),
-        MetallumGuiVertex(x: Float(textureWidth), y: Float(textureHeight), z: depthValue, color: packedColor, u: 0.0, v: 0.0)
-    ]
-    var uniforms = MetallumGuiUniforms(viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)))
+    var uniforms = MetallumFullscreenUniforms(
+        viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)),
+        z: depthValue,
+        _padding0: 0.0,
+        color: colorVectorFromARGB(clearColor),
+        uvMin: SIMD2<Float>(0.0, 0.0),
+        uvMax: SIMD2<Float>(0.0, 0.0)
+    )
 
     encoder.setRenderPipelineState(pipeline)
     encoder.setDepthStencilState(depthState)
-    fullscreenVertices.withUnsafeBytes { bytes in
-        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 0)
-    }
     withUnsafeBytes(of: &uniforms) { bytes in
         encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
     }

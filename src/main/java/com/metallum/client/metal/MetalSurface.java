@@ -76,6 +76,10 @@ final class MetalSurface implements GpuSurfaceBackend {
 			}
 		}
 
+		if (commandEncoder instanceof MetalCommandEncoder metalEncoder) {
+			metalEncoder.flushPendingTextureViewClear(textureView);
+		}
+
 		MetalGpuTexture source = (MetalGpuTexture)textureView.texture();
 		int result = MetalNativeBridge.INSTANCE.metallum_copy_texture_to_drawable(
 			this.device.commandQueue(),
@@ -90,11 +94,12 @@ final class MetalSurface implements GpuSurfaceBackend {
 
 	@Override
 	public void present() {
-		if (this.currentDrawable != null && this.blittedToDrawable) {
-			MetalNativeBridge.INSTANCE.metallum_present_drawable(this.device.commandQueue(), this.currentDrawable);
-		}
 		if (this.currentDrawable != null) {
-			MetalNativeBridge.INSTANCE.metallum_release_object(this.currentDrawable);
+			if (this.blittedToDrawable) {
+				MetalNativeBridge.INSTANCE.metallum_present_drawable(this.device.commandQueue(), this.currentDrawable);
+			} else {
+				MetalNativeBridge.INSTANCE.metallum_release_object(this.currentDrawable);
+			}
 			this.currentDrawable = null;
 		}
 		this.blittedToDrawable = false;
