@@ -6,8 +6,6 @@
 name: build
 on:
   push:
-    branches:
-      - master
     tags:
       - 'v*'
 
@@ -57,12 +55,18 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+          MINECRAFT_VERSION="$(sed -n 's/^minecraft_version=//p' gradle.properties | head -n1)"
           MAIN_JAR="$(find release-artifacts -maxdepth 1 -type f -name '*.jar' ! -name '*-dev.jar' ! -name '*-sources.jar' | head -n1)"
           if [ -z "${MAIN_JAR}" ]; then
             echo "Could not find main release jar in release-artifacts" >&2
             exit 1
           fi
+          if [ -z "${MINECRAFT_VERSION}" ]; then
+            echo "Could not resolve minecraft_version from gradle.properties" >&2
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "minecraft_version=${MINECRAFT_VERSION}" >> "$GITHUB_OUTPUT"
           echo "main_jar=${MAIN_JAR}" >> "$GITHUB_OUTPUT"
 
       - name: publish to Modrinth
@@ -73,7 +77,7 @@ jobs:
           version: ${{ steps.meta.outputs.version }}
           channel: alpha
           loaders: fabric
-          game-versions: 26.2-snapshot-3
+          game-versions: ${{ steps.meta.outputs.minecraft_version }}
           files: ${{ steps.meta.outputs.main_jar }}
 
       - name: create GitHub release
