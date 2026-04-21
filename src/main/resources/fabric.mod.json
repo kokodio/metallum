@@ -3,9 +3,9 @@
 	"id": "metallum",
 	"version": "${version}",
 	"name": "Metallum",
-	"description": "This is an example description! Tell everyone what your mod is about!",
+	"description": "This is an PoC Metal backend for Minecraft on macOS",
 	"authors": [
-		"Me!"
+		"kokodio"
 	],
 	"contact": {
 		"homepage": "https://fabricmc.net/",

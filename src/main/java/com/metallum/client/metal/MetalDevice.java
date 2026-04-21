@@ -145,7 +145,7 @@ final class MetalDevice implements GpuDeviceBackend {
 	}
 
 	boolean useLabels() {
-		return this.debugOptions.useLabels();
+		return true;
 	}
 
 	@Override

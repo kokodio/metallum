@@ -36,7 +36,7 @@ final class MetalGpuBuffer extends GpuBuffer {
 		this.allocationSize = device.allocationSize(size);
 		Pointer pooledHandle = device.acquireReusableBuffer(this.allocationSize, this.resourceOptions);
 		this.nativeHandle = MetalProbe.isNullPointer(pooledHandle)
-			? MetalNativeBridge.INSTANCE.metallum_create_buffer(device.metalDevicePointer(), this.allocationSize, this.resourceOptions)
+			? MetalNativeBridge.INSTANCE.metallum_create_buffer(device.metalDevicePointer(), this.allocationSize, this.resourceOptions, label)
 			: pooledHandle;
 		if (MetalProbe.isNullPointer(this.nativeHandle)) {
 			throw new IllegalStateException("Failed to create Metal buffer");

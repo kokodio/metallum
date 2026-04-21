@@ -64,6 +64,7 @@ private final class SubmitTracker {
     var inFlightMarkers: [SubmitMarker] = []
     var completedSubmitIndex: UInt64 = 1
     var submittedSubmitIndex: UInt64 = 1
+    var nextCommandBufferSerial: UInt64 = 1
     var pendingCommandBuffer: MTLCommandBuffer?
     var pendingPresentDrawable: CAMetalDrawable?
 }
@@ -345,6 +346,49 @@ private func colorVectorFromARGB(_ argb: Int32) -> SIMD4<Float> {
     )
 }
 
+private func stringFromOptionalCString(_ pointer: UnsafePointer<CChar>?) -> String? {
+    guard let pointer else {
+        return nil
+    }
+    let value = String(cString: pointer)
+    return value.isEmpty ? nil : value
+}
+
+private func textureLabel(_ texture: MTLTexture?) -> String {
+    guard let texture else {
+        return "nil"
+    }
+    if let label = texture.label, !label.isEmpty {
+        return label
+    }
+    return "\(texture.width)x\(texture.height) \(texture.pixelFormat)"
+}
+
+private func makeLabeledCommandBuffer(_ queue: MTLCommandQueue, purpose: String) -> MTLCommandBuffer? {
+    guard let commandBuffer = queue.makeCommandBuffer() else {
+        return nil
+    }
+    let tracker = submitTracker(for: queue)
+    tracker.condition.lock()
+    labelCommandBuffer(commandBuffer, tracker: tracker, purpose: purpose)
+    tracker.condition.unlock()
+    return commandBuffer
+}
+
+private func labelCommandBuffer(_ commandBuffer: MTLCommandBuffer, tracker: SubmitTracker, purpose: String) {
+    let serial = tracker.nextCommandBufferSerial
+    tracker.nextCommandBufferSerial += 1
+    commandBuffer.label = "Metallum \(purpose) CB #\(serial)"
+}
+
+private func setBlitEncoderLabel(_ encoder: MTLBlitCommandEncoder, _ label: String) {
+    encoder.label = "Metallum \(label)"
+}
+
+private func setRenderEncoderLabel(_ encoder: MTLRenderCommandEncoder, _ label: String) {
+    encoder.label = "Metallum \(label)"
+}
+
 private func guiMslSource() -> String {
     """
     #include <metal_stdlib>
@@ -417,6 +461,9 @@ private func submissionCommandBufferForEncoding(_ queue: MTLCommandQueue) -> MTL
     defer { tracker.condition.unlock() }
     if tracker.pendingCommandBuffer == nil {
         tracker.pendingCommandBuffer = queue.makeCommandBuffer()
+        if let commandBuffer = tracker.pendingCommandBuffer {
+            labelCommandBuffer(commandBuffer, tracker: tracker, purpose: "Frame")
+        }
     }
     return tracker.pendingCommandBuffer
 }
@@ -427,6 +474,9 @@ private func takeSubmissionCommandBufferForSubmit(_ queue: MTLCommandQueue) -> M
     defer { tracker.condition.unlock() }
     if tracker.pendingCommandBuffer == nil {
         tracker.pendingCommandBuffer = queue.makeCommandBuffer()
+        if let commandBuffer = tracker.pendingCommandBuffer {
+            labelCommandBuffer(commandBuffer, tracker: tracker, purpose: "Frame")
+        }
     }
     let commandBuffer = tracker.pendingCommandBuffer
     tracker.pendingCommandBuffer = nil
@@ -471,7 +521,7 @@ private func queueDrawablePresent(_ queue: MTLCommandQueue, _ drawable: CAMetalD
     }
     tracker.condition.unlock()
 
-    guard let commandBuffer = queue.makeCommandBuffer() else {
+    guard let commandBuffer = makeLabeledCommandBuffer(queue, purpose: "Present") else {
         return 1
     }
     keepObjectAliveUntilCompleted(commandBuffer, drawable)
@@ -548,6 +598,7 @@ private func buildGuiPipeline(device: MTLDevice, textured: Bool, colorFormat: MT
         }
 
         let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.label = "Metallum \(textured ? "textured" : "color") helper pipeline color=\(colorFormat) depth=\(depthFormat)"
         descriptor.vertexFunction = vertexFunction
         descriptor.fragmentFunction = fragmentFunction
         descriptor.colorAttachments[0].pixelFormat = colorFormat
@@ -585,6 +636,7 @@ private func buildPresentPipeline(device: MTLDevice, colorFormat: MTLPixelFormat
         }
 
         let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.label = "Metallum present pipeline color=\(colorFormat)"
         descriptor.vertexFunction = vertexFunction
         descriptor.fragmentFunction = fragmentFunction
         descriptor.colorAttachments[0].pixelFormat = colorFormat
@@ -604,6 +656,7 @@ private func ensurePresentLinearSampler(_ device: MTLDevice) -> MTLSamplerState?
             return cached
         }
         let descriptor = MTLSamplerDescriptor()
+        descriptor.label = "Metallum present linear sampler"
         descriptor.minFilter = .linear
         descriptor.magFilter = .linear
         descriptor.mipFilter = .notMipmapped
@@ -624,6 +677,7 @@ private func ensurePresentNearestSampler(_ device: MTLDevice) -> MTLSamplerState
             return cached
         }
         let descriptor = MTLSamplerDescriptor()
+        descriptor.label = "Metallum present nearest sampler"
         descriptor.minFilter = .nearest
         descriptor.magFilter = .nearest
         descriptor.mipFilter = .notMipmapped
@@ -765,6 +819,7 @@ private func ensureDynamicPipeline(
         }
 
         let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.label = "Metallum pipeline \(vertexEntry)->\(fragmentEntry) color=\(colorFormat) depth=\(depthFormat)"
         descriptor.vertexFunction = vertexFunction
         descriptor.fragmentFunction = fragmentFunction
         descriptor.colorAttachments[0].pixelFormat = colorFormat
@@ -887,11 +942,20 @@ public func metallum_create_command_queue(_ devicePtr: UnsafeMutableRawPointer?)
 }
 
 @_cdecl("metallum_create_buffer")
-public func metallum_create_buffer(_ devicePtr: UnsafeMutableRawPointer?, _ length: UInt64, _ options: UInt64) -> UnsafeMutableRawPointer? {
+public func metallum_create_buffer(
+    _ devicePtr: UnsafeMutableRawPointer?,
+    _ length: UInt64,
+    _ options: UInt64,
+    _ labelPtr: UnsafePointer<CChar>?
+) -> UnsafeMutableRawPointer? {
     guard let device: MTLDevice = object(devicePtr) else {
         return nil
     }
-    return retainedPointer(device.makeBuffer(length: Int(length), options: MTLResourceOptions(rawValue: UInt(options))))
+    guard let buffer = device.makeBuffer(length: Int(length), options: MTLResourceOptions(rawValue: UInt(options))) else {
+        return nil
+    }
+    buffer.label = stringFromOptionalCString(labelPtr)
+    return retainedPointer(buffer)
 }
 
 @_cdecl("metallum_create_texture_2d")
@@ -904,7 +968,8 @@ public func metallum_create_texture_2d(
     _ mipLevels: UInt64,
     _ cubeCompatible: UInt64,
     _ usage: UInt64,
-    _ storageMode: UInt64
+    _ storageMode: UInt64,
+    _ labelPtr: UnsafePointer<CChar>?
 ) -> UnsafeMutableRawPointer? {
     guard let device: MTLDevice = object(devicePtr) else {
         return nil
@@ -933,7 +998,11 @@ public func metallum_create_texture_2d(
     descriptor.mipmapLevelCount = max(Int(mipLevels), 1)
     descriptor.usage = MTLTextureUsage(rawValue: UInt(usage))
     descriptor.storageMode = MTLStorageMode(rawValue: UInt(storageMode)) ?? .shared
-    return retainedPointer(device.makeTexture(descriptor: descriptor))
+    guard let texture = device.makeTexture(descriptor: descriptor) else {
+        return nil
+    }
+    texture.label = stringFromOptionalCString(labelPtr)
+    return retainedPointer(texture)
 }
 
 @_cdecl("metallum_create_texture_view")
@@ -954,6 +1023,7 @@ public func metallum_create_texture_view(_ texturePtr: UnsafeMutableRawPointer?,
         levels: NSRange(location: baseLevel, length: levelCount),
         slices: NSRange(location: 0, length: textureSliceCount(texture))
     )
+    view?.label = "\(textureLabel(texture)) view mip=\(baseLevel)..<\(baseLevel + levelCount)"
     return retainedPointer(view)
 }
 
@@ -986,7 +1056,11 @@ public func metallum_create_buffer_texture_view(
         return nil
     }
 
-    return retainedPointer(buffer.makeTexture(descriptor: descriptor, offset: nativeOffset, bytesPerRow: nativeBytesPerRow))
+    guard let textureView = buffer.makeTexture(descriptor: descriptor, offset: nativeOffset, bytesPerRow: nativeBytesPerRow) else {
+        return nil
+    }
+    textureView.label = "\(buffer.label ?? "buffer") texel view"
+    return retainedPointer(textureView)
 }
 
 @_cdecl("metallum_upload_buffer_region_async")
@@ -1012,6 +1086,7 @@ public func metallum_upload_buffer_region_async(
     guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    setBlitEncoderLabel(blit, "upload buffer -> \(destinationBuffer.label ?? "buffer")")
     blit.copy(from: stagingBuffer, sourceOffset: 0, to: destinationBuffer, destinationOffset: Int(destinationOffset), size: Int(length))
     blit.endEncoding()
     keepObjectAliveUntilCompleted(commandBuffer, stagingBuffer)
@@ -1040,6 +1115,7 @@ public func metallum_copy_buffer_to_buffer(
     guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    setBlitEncoderLabel(blit, "copy buffer \(sourceBuffer.label ?? "buffer") -> \(destinationBuffer.label ?? "buffer")")
     blit.copy(from: sourceBuffer, sourceOffset: Int(sourceOffset), to: destinationBuffer, destinationOffset: Int(destinationOffset), size: Int(length))
     blit.endEncoding()
     keepObjectAliveUntilCompleted(commandBuffer, sourceBuffer)
@@ -1074,6 +1150,7 @@ public func metallum_copy_buffer_to_texture(
     guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    setBlitEncoderLabel(blit, "copy buffer \(sourceBuffer.label ?? "buffer") -> texture \(textureLabel(texture))")
     blit.copy(
         from: sourceBuffer,
         sourceOffset: Int(sourceOffset),
@@ -1116,6 +1193,7 @@ public func metallum_copy_texture_to_texture(
     guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    setBlitEncoderLabel(blit, "copy texture \(textureLabel(sourceTexture)) -> \(textureLabel(destinationTexture))")
     blit.copy(
         from: sourceTexture,
         sourceSlice: 0,
@@ -1158,6 +1236,7 @@ public func metallum_copy_texture_to_buffer(
     guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    setBlitEncoderLabel(blit, "copy texture \(textureLabel(sourceTexture)) -> buffer \(destinationBuffer.label ?? "buffer")")
     blit.copy(
         from: sourceTexture,
         sourceSlice: Int(slice),
@@ -1206,6 +1285,7 @@ public func metallum_begin_render_pass(
     _ commandQueuePtr: UnsafeMutableRawPointer?,
     _ colorTexturePtr: UnsafeMutableRawPointer?,
     _ depthTexturePtr: UnsafeMutableRawPointer?,
+    _ labelPtr: UnsafePointer<CChar>?,
     _ viewportWidth: Double,
     _ viewportHeight: Double,
     _ clearColorEnabled: Int32,
@@ -1220,6 +1300,7 @@ public func metallum_begin_render_pass(
         return nil
     }
     let depthTexture: MTLTexture? = object(depthTexturePtr)
+    let passLabel = stringFromOptionalCString(labelPtr) ?? "render pass \(textureLabel(colorTexture))"
     guard let commandBuffer = submissionCommandBufferForEncoding(queue) else {
         return nil
     }
@@ -1251,6 +1332,7 @@ public func metallum_begin_render_pass(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return nil
     }
+    setRenderEncoderLabel(encoder, passLabel)
     encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: viewportWidth, height: viewportHeight, znear: 0.0, zfar: 1.0))
 
     let session = RenderPassSession(
@@ -1629,6 +1711,7 @@ public func metallum_copy_texture_to_drawable(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    setRenderEncoderLabel(encoder, "present \(textureLabel(sourceTexture)) -> drawable")
 
     let w = Float(drawable.texture.width)
     let h = Float(drawable.texture.height)
@@ -1753,6 +1836,7 @@ public func metallum_clear_texture(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    setRenderEncoderLabel(encoder, "clear \(textureLabel(texture))")
     encoder.endEncoding()
     return 0
 }
@@ -1803,6 +1887,7 @@ public func metallum_clear_color_texture_region(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    setRenderEncoderLabel(encoder, "clear region \(textureLabel(texture))")
 
     encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: Double(textureWidth), height: Double(textureHeight), znear: 0.0, zfar: 1.0))
     encoder.setScissorRect(MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY))
@@ -1867,6 +1952,7 @@ public func metallum_clear_color_depth_textures(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    setRenderEncoderLabel(encoder, "clear color+depth \(textureLabel(colorTexture)) + \(textureLabel(depthTexture))")
     encoder.endEncoding()
     return 0
 }
@@ -1933,6 +2019,7 @@ public func metallum_clear_color_depth_textures_region(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    setRenderEncoderLabel(encoder, "clear color+depth region \(textureLabel(colorTexture)) + \(textureLabel(depthTexture))")
 
     encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: Double(textureWidth), height: Double(textureHeight), znear: 0.0, zfar: 1.0))
     encoder.setScissorRect(MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY))

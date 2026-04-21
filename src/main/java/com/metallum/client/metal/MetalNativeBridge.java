@@ -76,13 +76,13 @@ final class MetalNativeBridge {
 		this.acquireNextDrawable = downcall(lookup, "metallum_acquire_next_drawable", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.copyTextureToDrawable = downcall(lookup, "metallum_copy_texture_to_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.presentDrawable = downcall(lookup, "metallum_present_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-		this.createBuffer = downcall(lookup, "metallum_create_buffer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG));
+		this.createBuffer = downcall(lookup, "metallum_create_buffer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, ValueLayout.ADDRESS));
 		this.uploadBufferRegionAsync = downcall(lookup, "metallum_upload_buffer_region_async", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG));
 		this.copyBufferToBuffer = downcall(lookup, "metallum_copy_buffer_to_buffer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG, LONG));
 		this.createTexture2d = downcall(
 			lookup,
 			"metallum_create_texture_2d",
-			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG)
+			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG, LONG, LONG, LONG, LONG, ValueLayout.ADDRESS)
 		);
 		this.createTextureView = downcall(lookup, "metallum_create_texture_view", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG));
 		this.createBufferTextureView = downcall(
@@ -113,7 +113,7 @@ final class MetalNativeBridge {
 		this.beginRenderPass = downcall(
 			lookup,
 			"metallum_begin_render_pass",
-			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, DOUBLE, DOUBLE, INT, INT, INT, DOUBLE)
+			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, DOUBLE, DOUBLE, INT, INT, INT, DOUBLE)
 		);
 		this.createRenderPipeline = downcall(
 			lookup,
@@ -246,9 +246,9 @@ final class MetalNativeBridge {
 		}
 	}
 
-	Pointer metallum_create_buffer(final Pointer device, final long length, final long options) {
-		try {
-			return toPointer((MemorySegment)this.createBuffer.invokeExact(toSegment(device), length, options));
+	Pointer metallum_create_buffer(final Pointer device, final long length, final long options, final String label) {
+		try (Arena arena = Arena.ofConfined()) {
+			return toPointer((MemorySegment)this.createBuffer.invokeExact(toSegment(device), length, options, toCString(arena, label)));
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_create_buffer", throwable);
 		}
@@ -305,9 +305,10 @@ final class MetalNativeBridge {
 		final long mipLevels,
 		final long cubeCompatible,
 		final long usage,
-		final long storageMode
+		final long storageMode,
+		final String label
 	) {
-		try {
+		try (Arena arena = Arena.ofConfined()) {
 			return toPointer((MemorySegment)this.createTexture2d.invokeExact(
 				toSegment(device),
 				pixelFormat,
@@ -317,7 +318,8 @@ final class MetalNativeBridge {
 				mipLevels,
 				cubeCompatible,
 				usage,
-				storageMode
+				storageMode,
+				toCString(arena, label)
 			));
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_create_texture_2d", throwable);
@@ -480,13 +482,15 @@ final class MetalNativeBridge {
 		final int clearColorEnabled,
 		final int clearColor,
 		final int clearDepthEnabled,
-		final double clearDepth
+		final double clearDepth,
+		final String label
 	) {
-		try {
+		try (Arena arena = Arena.ofConfined()) {
 			return toPointer((MemorySegment)this.beginRenderPass.invokeExact(
 				toSegment(commandQueue),
 				toSegment(colorTexture),
 				toSegment(depthTexture),
+				toCString(arena, label),
 				viewportWidth,
 				viewportHeight,
 				clearColorEnabled,
@@ -843,6 +847,7 @@ final class MetalNativeBridge {
 			throw bridgeFailure("metallum_clear_color_texture_region", throwable);
 		}
 	}
+
 
 	Pointer metallum_get_buffer_contents(final Pointer buffer) {
 		try {

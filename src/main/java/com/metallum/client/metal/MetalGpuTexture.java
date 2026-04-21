@@ -53,7 +53,8 @@ final class MetalGpuTexture extends GpuTexture {
 			mipLevels,
 			(usage & GpuTexture.USAGE_CUBEMAP_COMPATIBLE) != 0 ? 1L : 0L,
 			toMtlTextureUsage(usage),
-			storageMode
+			storageMode,
+			label
 		);
 	}
 

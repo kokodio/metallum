@@ -36,6 +36,7 @@ final class MetalRenderPass implements RenderPassBackend {
 	private final GpuTextureView colorTexture;
 	@Nullable
 	private final GpuTextureView depthTexture;
+	private final RenderPass.RenderArea renderArea;
 	private final boolean clearColorEnabled;
 	private final int clearColor;
 	private final boolean clearDepthEnabled;
@@ -68,6 +69,7 @@ final class MetalRenderPass implements RenderPassBackend {
 		final Supplier<String> label,
 		final GpuTextureView colorTexture,
 		@Nullable final GpuTextureView depthTexture,
+		final RenderPass.RenderArea renderArea,
 		final boolean clearColorEnabled,
 		final int clearColor,
 		final boolean clearDepthEnabled,
@@ -78,6 +80,7 @@ final class MetalRenderPass implements RenderPassBackend {
 		this.label = device.useLabels() ? label.get() : null;
 		this.colorTexture = colorTexture;
 		this.depthTexture = depthTexture;
+		this.renderArea = renderArea;
 		this.clearColorEnabled = clearColorEnabled;
 		this.clearColor = clearColor;
 		this.clearDepthEnabled = clearDepthEnabled;
@@ -312,7 +315,8 @@ final class MetalRenderPass implements RenderPassBackend {
 			this.clearColorEnabled ? 1 : 0,
 			this.clearColor,
 			this.clearDepthEnabled ? 1 : 0,
-			this.clearDepth
+			this.clearDepth,
+			this.label
 		);
 		if (MetalProbe.isNullPointer(handle)) {
 			LOGGER.warn("Failed to begin Metal render pass '{}'", this.label);
@@ -469,13 +473,14 @@ final class MetalRenderPass implements RenderPassBackend {
 		}
 
 		if (reboundPipeline || this.scissorDirty) {
+			EffectiveScissor effectiveScissor = this.effectiveScissor();
 			int result = MetalNativeBridge.INSTANCE.metallum_render_pass_set_scissor(
 				renderPass,
-				this.scissorState.enabled() ? 1 : 0,
-				this.scissorState.x(),
-				this.scissorState.y(),
-				this.scissorState.width(),
-				this.scissorState.height()
+				effectiveScissor.enabled() ? 1 : 0,
+				effectiveScissor.x(),
+				effectiveScissor.y(),
+				effectiveScissor.width(),
+				effectiveScissor.height()
 			);
 			if (result != 0) {
 				throw new IllegalStateException("Failed to set native scissor, code " + result);
@@ -532,6 +537,33 @@ final class MetalRenderPass implements RenderPassBackend {
 			this.pushDescriptor(renderPass, colorAttachment, binding);
 		}
 		this.dirtyBindings.clear();
+	}
+
+	private EffectiveScissor effectiveScissor() {
+		int areaLeft = this.renderArea.x();
+		int areaTop = this.renderArea.y();
+		int areaRight = areaLeft + this.renderArea.width();
+		int areaBottom = areaTop + this.renderArea.height();
+		if (!this.scissorState.enabled()) {
+			return this.renderArea.fillsTexture(this.colorTexture)
+				? EffectiveScissor.disabled()
+				: new EffectiveScissor(true, areaLeft, areaTop, this.renderArea.width(), this.renderArea.height());
+		}
+
+		int left = Math.max(areaLeft, this.scissorState.x());
+		int top = Math.max(areaTop, this.scissorState.y());
+		int right = Math.min(areaRight, this.scissorState.x() + this.scissorState.width());
+		int bottom = Math.min(areaBottom, this.scissorState.y() + this.scissorState.height());
+		if (right <= left || bottom <= top) {
+			return new EffectiveScissor(true, 0, 0, 0, 0);
+		}
+		return new EffectiveScissor(true, left, top, right - left, bottom - top);
+	}
+
+	private record EffectiveScissor(boolean enabled, int x, int y, int width, int height) {
+		static EffectiveScissor disabled() {
+			return new EffectiveScissor(false, 0, 0, 0, 0);
+		}
 	}
 
 	private void markBindingDirty(final String name) {

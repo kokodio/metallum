@@ -8,6 +8,7 @@ import com.mojang.blaze3d.buffers.GpuFence;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.GpuQueryPool;
+import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderPassBackend;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
@@ -54,27 +55,24 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 	}
 
 	@Override
-	public RenderPassBackend createRenderPass(final Supplier<String> label, final GpuTextureView colorTexture, final OptionalInt clearColor) {
-		return this.createRenderPass(label, colorTexture, clearColor, null, OptionalDouble.empty());
-	}
-
-	@Override
 	public RenderPassBackend createRenderPass(
 		final Supplier<String> label,
 		final GpuTextureView colorTexture,
 		final OptionalInt clearColor,
 		@Nullable final GpuTextureView depthTexture,
-		final OptionalDouble clearDepth
+		final OptionalDouble clearDepth,
+		final RenderPass.RenderArea renderArea
 	) {
 		//this.submitRenderPass();
-		ResolvedColorClear resolvedColorClear = this.resolveColorAttachmentClear(colorTexture, clearColor);
-		ResolvedDepthClear resolvedDepthClear = depthTexture == null ? ResolvedDepthClear.disabled() : this.resolveDepthAttachmentClear(depthTexture, clearDepth);
+		ResolvedColorClear resolvedColorClear = this.resolveColorAttachmentClear(colorTexture, clearColor, renderArea);
+		ResolvedDepthClear resolvedDepthClear = depthTexture == null ? ResolvedDepthClear.disabled() : this.resolveDepthAttachmentClear(depthTexture, clearDepth, renderArea);
 		return this.currentRenderPass = new MetalRenderPass(
 			this.device,
 			this,
 			label,
 			colorTexture,
 			depthTexture,
+			renderArea,
 			resolvedColorClear.enabled(),
 			resolvedColorClear.clearColor(),
 			depthTexture != null && resolvedDepthClear.enabled(),
@@ -423,7 +421,11 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		}
 	}
 
-	private ResolvedColorClear resolveColorAttachmentClear(final GpuTextureView textureView, final OptionalInt explicitClear) {
+	private ResolvedColorClear resolveColorAttachmentClear(
+		final GpuTextureView textureView,
+		final OptionalInt explicitClear,
+		final RenderPass.RenderArea renderArea
+	) {
 		MetalGpuTexture texture = castTexture(textureView.texture());
 		PendingTextureClear pending = this.pendingTextureClears.get(texture);
 		if (pending == null || !pending.colorPending) {
@@ -444,7 +446,11 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		return new ResolvedColorClear(true, clearColor);
 	}
 
-	private ResolvedDepthClear resolveDepthAttachmentClear(final GpuTextureView textureView, final OptionalDouble explicitClear) {
+	private ResolvedDepthClear resolveDepthAttachmentClear(
+		final GpuTextureView textureView,
+		final OptionalDouble explicitClear,
+		final RenderPass.RenderArea renderArea
+	) {
 		MetalGpuTexture texture = castTexture(textureView.texture());
 		PendingTextureClear pending = this.pendingTextureClears.get(texture);
 		if (pending == null || !pending.depthPending) {
