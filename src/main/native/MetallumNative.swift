@@ -67,25 +67,30 @@ private final class SubmitTracker {
     var nextCommandBufferSerial: UInt64 = 1
     var pendingCommandBuffer: MTLCommandBuffer?
     var pendingPresentDrawable: CAMetalDrawable?
+    var pendingRenderPass: RenderPassSession?
 }
 
 private final class RenderPassSession {
     let commandBuffer: MTLCommandBuffer
     let encoder: MTLRenderCommandEncoder
     let device: MTLDevice
+    let colorAttachmentAddress: UInt
+    let depthAttachmentAddress: UInt
     var indexBuffer: MTLBuffer?
     var indexType: UInt64 = 0
     let colorFormat: MTLPixelFormat
     let depthFormat: MTLPixelFormat
     let stencilFormat: MTLPixelFormat
-    let viewportWidth: Double
-    let viewportHeight: Double
+    var viewportWidth: Double
+    var viewportHeight: Double
     var flipVertexY: Bool = false
 
     init(
         commandBuffer: MTLCommandBuffer,
         encoder: MTLRenderCommandEncoder,
         device: MTLDevice,
+        colorAttachmentAddress: UInt,
+        depthAttachmentAddress: UInt,
         colorFormat: MTLPixelFormat,
         depthFormat: MTLPixelFormat,
         stencilFormat: MTLPixelFormat,
@@ -95,6 +100,8 @@ private final class RenderPassSession {
         self.commandBuffer = commandBuffer
         self.encoder = encoder
         self.device = device
+        self.colorAttachmentAddress = colorAttachmentAddress
+        self.depthAttachmentAddress = depthAttachmentAddress
         self.colorFormat = colorFormat
         self.depthFormat = depthFormat
         self.stencilFormat = stencilFormat
@@ -455,10 +462,7 @@ private func submitTracker(for queue: MTLCommandQueue) -> SubmitTracker {
     }
 }
 
-private func submissionCommandBufferForEncoding(_ queue: MTLCommandQueue) -> MTLCommandBuffer? {
-    let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    defer { tracker.condition.unlock() }
+private func ensureSubmissionCommandBufferLocked(_ queue: MTLCommandQueue, _ tracker: SubmitTracker) -> MTLCommandBuffer? {
     if tracker.pendingCommandBuffer == nil {
         tracker.pendingCommandBuffer = queue.makeCommandBuffer()
         if let commandBuffer = tracker.pendingCommandBuffer {
@@ -468,16 +472,102 @@ private func submissionCommandBufferForEncoding(_ queue: MTLCommandQueue) -> MTL
     return tracker.pendingCommandBuffer
 }
 
+private func finishPendingRenderPassLocked(_ tracker: SubmitTracker) {
+    guard let session = tracker.pendingRenderPass else {
+        return
+    }
+    session.encoder.endEncoding()
+    tracker.pendingRenderPass = nil
+}
+
+private func submissionCommandBufferForStandaloneEncoding(_ queue: MTLCommandQueue) -> MTLCommandBuffer? {
+    let tracker = submitTracker(for: queue)
+    tracker.condition.lock()
+    defer { tracker.condition.unlock() }
+    let commandBuffer = ensureSubmissionCommandBufferLocked(queue, tracker)
+    finishPendingRenderPassLocked(tracker)
+    return commandBuffer
+}
+
+private func canReuseRenderPass(
+    _ session: RenderPassSession,
+    colorTexture: MTLTexture,
+    depthTexture: MTLTexture?
+) -> Bool {
+    session.colorAttachmentAddress == objectAddress(colorTexture)
+        && session.depthAttachmentAddress == (depthTexture.map(objectAddress) ?? 0)
+}
+
+private func reusePendingRenderPassIfCompatible(
+    _ queue: MTLCommandQueue,
+    colorTexture: MTLTexture,
+    depthTexture: MTLTexture?,
+    viewportWidth: Double,
+    viewportHeight: Double
+) -> RenderPassSession? {
+    let tracker = submitTracker(for: queue)
+    tracker.condition.lock()
+    defer { tracker.condition.unlock() }
+    guard let session = tracker.pendingRenderPass,
+          canReuseRenderPass(
+            session,
+            colorTexture: colorTexture,
+            depthTexture: depthTexture
+          ) else {
+        return nil
+    }
+
+    prepareRenderPassSessionForReuse(session, viewportWidth: viewportWidth, viewportHeight: viewportHeight)
+    return session
+}
+
+private func prepareRenderPassSessionForReuse(_ session: RenderPassSession, viewportWidth: Double, viewportHeight: Double) {
+    session.viewportWidth = viewportWidth
+    session.viewportHeight = viewportHeight
+    session.indexBuffer = nil
+    session.indexType = 0
+    session.flipVertexY = false
+    session.encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: viewportWidth, height: viewportHeight, znear: 0.0, zfar: 1.0))
+}
+
+private func encodeClearDraw(
+    encoder: MTLRenderCommandEncoder,
+    pipeline: MTLRenderPipelineState,
+    textureWidth: Int,
+    textureHeight: Int,
+    clearColor: Int32,
+    scissorRect: MTLScissorRect,
+    depthState: MTLDepthStencilState? = nil,
+    clearDepth: Double = 0.0
+) {
+    encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: Double(textureWidth), height: Double(textureHeight), znear: 0.0, zfar: 1.0))
+    encoder.setScissorRect(scissorRect)
+
+    var uniforms = MetallumFullscreenUniforms(
+        viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)),
+        z: depthState == nil ? 0.0 : Float(max(0.0, min(clearDepth, 1.0))),
+        _padding0: 0.0,
+        color: colorVectorFromARGB(clearColor),
+        uvMin: SIMD2<Float>(0.0, 0.0),
+        uvMax: SIMD2<Float>(0.0, 0.0)
+    )
+
+    encoder.setRenderPipelineState(pipeline)
+    if let depthState {
+        encoder.setDepthStencilState(depthState)
+    }
+    withUnsafeBytes(of: &uniforms) { bytes in
+        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
+    }
+    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+}
+
 private func takeSubmissionCommandBufferForSubmit(_ queue: MTLCommandQueue) -> MTLCommandBuffer? {
     let tracker = submitTracker(for: queue)
     tracker.condition.lock()
     defer { tracker.condition.unlock() }
-    if tracker.pendingCommandBuffer == nil {
-        tracker.pendingCommandBuffer = queue.makeCommandBuffer()
-        if let commandBuffer = tracker.pendingCommandBuffer {
-            labelCommandBuffer(commandBuffer, tracker: tracker, purpose: "Frame")
-        }
-    }
+    _ = ensureSubmissionCommandBufferLocked(queue, tracker)
+    finishPendingRenderPassLocked(tracker)
     let commandBuffer = tracker.pendingCommandBuffer
     tracker.pendingCommandBuffer = nil
     return commandBuffer
@@ -1083,7 +1173,7 @@ public func metallum_upload_buffer_region_async(
     guard let stagingBuffer = queue.device.makeBuffer(bytes: bytes, length: Int(length), options: .storageModeShared) else {
         return 1
     }
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
+    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
     setBlitEncoderLabel(blit, "upload buffer -> \(destinationBuffer.label ?? "buffer")")
@@ -1112,7 +1202,7 @@ public func metallum_copy_buffer_to_buffer(
         return 1
     }
 
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
+    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
     setBlitEncoderLabel(blit, "copy buffer \(sourceBuffer.label ?? "buffer") -> \(destinationBuffer.label ?? "buffer")")
@@ -1147,7 +1237,7 @@ public func metallum_copy_buffer_to_texture(
     else {
         return 1
     }
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
+    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
     setBlitEncoderLabel(blit, "copy buffer \(sourceBuffer.label ?? "buffer") -> texture \(textureLabel(texture))")
@@ -1190,7 +1280,7 @@ public func metallum_copy_texture_to_texture(
     else {
         return 1
     }
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
+    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
     setBlitEncoderLabel(blit, "copy texture \(textureLabel(sourceTexture)) -> \(textureLabel(destinationTexture))")
@@ -1233,7 +1323,7 @@ public func metallum_copy_texture_to_buffer(
     else {
         return 1
     }
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
+    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
     setBlitEncoderLabel(blit, "copy texture \(textureLabel(sourceTexture)) -> buffer \(destinationBuffer.label ?? "buffer")")
@@ -1301,7 +1391,24 @@ public func metallum_begin_render_pass(
     }
     let depthTexture: MTLTexture? = object(depthTexturePtr)
     let passLabel = stringFromOptionalCString(labelPtr) ?? "render pass \(textureLabel(colorTexture))"
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue) else {
+    let depthFormat = depthTexture?.pixelFormat ?? .invalid
+    let stencilFormat = stencilPixelFormat(for: depthFormat)
+    if let session = reusePendingRenderPassIfCompatible(
+        queue,
+        colorTexture: colorTexture,
+        depthTexture: depthTexture,
+        viewportWidth: viewportWidth,
+        viewportHeight: viewportHeight
+    ) {
+        setRenderEncoderLabel(session.encoder, passLabel)
+        return UnsafeMutableRawPointer(Unmanaged.passRetained(session).toOpaque())
+    }
+
+    let tracker = submitTracker(for: queue)
+    tracker.condition.lock()
+    defer { tracker.condition.unlock() }
+    finishPendingRenderPassLocked(tracker)
+    guard let commandBuffer = ensureSubmissionCommandBufferLocked(queue, tracker) else {
         return nil
     }
 
@@ -1315,8 +1422,6 @@ public func metallum_begin_render_pass(
     }
     renderPass.colorAttachments[0].storeAction = .store
 
-    let depthFormat = depthTexture?.pixelFormat ?? .invalid
-    let stencilFormat = stencilPixelFormat(for: depthFormat)
     if let depthTexture {
         renderPass.depthAttachment.texture = depthTexture
         renderPass.depthAttachment.loadAction = clearDepthEnabled != 0 ? .clear : .load
@@ -1339,12 +1444,15 @@ public func metallum_begin_render_pass(
         commandBuffer: commandBuffer,
         encoder: encoder,
         device: queue.device,
+        colorAttachmentAddress: objectAddress(colorTexture),
+        depthAttachmentAddress: depthTexture.map(objectAddress) ?? 0,
         colorFormat: colorTexture.pixelFormat,
         depthFormat: depthFormat,
         stencilFormat: stencilFormat,
         viewportWidth: viewportWidth,
         viewportHeight: viewportHeight
     )
+    tracker.pendingRenderPass = session
     keepObjectAliveUntilCompleted(commandBuffer, colorTexture)
     keepObjectAliveUntilCompleted(commandBuffer, depthTexture)
     return UnsafeMutableRawPointer(Unmanaged.passRetained(session).toOpaque())
@@ -1656,10 +1764,9 @@ public func metallum_render_pass_draw_triangle_fan(
 
 @_cdecl("metallum_end_render_pass")
 public func metallum_end_render_pass(_ renderPassPtr: UnsafeMutableRawPointer?) -> Int32 {
-    guard let session = takeRenderPassSession(renderPassPtr) else {
+    guard takeRenderPassSession(renderPassPtr) != nil else {
         return 0
     }
-    session.encoder.endEncoding()
     return 0
 }
 
@@ -1698,7 +1805,7 @@ public func metallum_copy_texture_to_drawable(
         return 1
     }
     guard
-        let commandBuffer = submissionCommandBufferForEncoding(queue),
+        let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue),
         let pipeline = ensurePresentPipeline(queue.device, drawable.texture.pixelFormat)
     else {
         return 1
@@ -1804,13 +1911,13 @@ public func metallum_clear_texture(
     guard let queue: MTLCommandQueue = object(commandQueuePtr), let texture: MTLTexture = object(texturePtr) else {
         return 1
     }
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue) else {
+    let format = texture.pixelFormat
+    let isDepthLike = format == .depth16Unorm || format == .depth32Float || format == .depth24Unorm_stencil8 || format == .depth32Float_stencil8
+    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue) else {
         return 1
     }
 
     let renderPass = MTLRenderPassDescriptor()
-    let format = texture.pixelFormat
-    let isDepthLike = format == .depth16Unorm || format == .depth32Float || format == .depth24Unorm_stencil8 || format == .depth32Float_stencil8
 
     if isDepthLike {
         renderPass.depthAttachment.texture = texture
@@ -1869,12 +1976,13 @@ public func metallum_clear_color_texture_region(
     if clampedX >= clampedMaxX || clampedY >= clampedMaxY {
         return 0
     }
+    let scissorRect = MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY)
     if clampedX == 0 && clampedY == 0 && clampedMaxX == textureWidth && clampedMaxY == textureHeight {
         return metallum_clear_texture(commandQueuePtr, texturePtr, 1, clearColor, 0, 1.0)
     }
 
     guard
-        let commandBuffer = submissionCommandBufferForEncoding(queue),
+        let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue),
         let pipeline = ensureClearPipeline(queue.device, texture.pixelFormat)
     else {
         return 1
@@ -1888,24 +1996,14 @@ public func metallum_clear_color_texture_region(
         return 1
     }
     setRenderEncoderLabel(encoder, "clear region \(textureLabel(texture))")
-
-    encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: Double(textureWidth), height: Double(textureHeight), znear: 0.0, zfar: 1.0))
-    encoder.setScissorRect(MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY))
-
-    var uniforms = MetallumFullscreenUniforms(
-        viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)),
-        z: 0.0,
-        _padding0: 0.0,
-        color: colorVectorFromARGB(clearColor),
-        uvMin: SIMD2<Float>(0.0, 0.0),
-        uvMax: SIMD2<Float>(0.0, 0.0)
+    encodeClearDraw(
+        encoder: encoder,
+        pipeline: pipeline,
+        textureWidth: textureWidth,
+        textureHeight: textureHeight,
+        clearColor: clearColor,
+        scissorRect: scissorRect
     )
-
-    encoder.setRenderPipelineState(pipeline)
-    withUnsafeBytes(of: &uniforms) { bytes in
-        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-    }
-    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     encoder.endEncoding()
 
     keepObjectAliveUntilCompleted(commandBuffer, texture)
@@ -1927,7 +2025,7 @@ public func metallum_clear_color_depth_textures(
     else {
         return 1
     }
-    guard let commandBuffer = submissionCommandBufferForEncoding(queue) else {
+    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue) else {
         return 1
     }
 
@@ -1988,12 +2086,13 @@ public func metallum_clear_color_depth_textures_region(
     if clampedX >= clampedMaxX || clampedY >= clampedMaxY {
         return 0
     }
+    let scissorRect = MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY)
     if clampedX == 0 && clampedY == 0 && clampedMaxX == textureWidth && clampedMaxY == textureHeight {
         return metallum_clear_color_depth_textures(commandQueuePtr, colorTexturePtr, clearColor, depthTexturePtr, clearDepth)
     }
 
     guard
-        let commandBuffer = submissionCommandBufferForEncoding(queue),
+        let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue),
         let pipeline = ensureClearColorDepthPipeline(queue.device, colorTexture.pixelFormat, depthTexture.pixelFormat),
         let depthState = ensureDepthStencilState(device: queue.device, compareOp: 1, writeDepth: true)
     else {
@@ -2020,26 +2119,16 @@ public func metallum_clear_color_depth_textures_region(
         return 1
     }
     setRenderEncoderLabel(encoder, "clear color+depth region \(textureLabel(colorTexture)) + \(textureLabel(depthTexture))")
-
-    encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: Double(textureWidth), height: Double(textureHeight), znear: 0.0, zfar: 1.0))
-    encoder.setScissorRect(MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY))
-
-    let depthValue = Float(max(0.0, min(clearDepth, 1.0)))
-    var uniforms = MetallumFullscreenUniforms(
-        viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)),
-        z: depthValue,
-        _padding0: 0.0,
-        color: colorVectorFromARGB(clearColor),
-        uvMin: SIMD2<Float>(0.0, 0.0),
-        uvMax: SIMD2<Float>(0.0, 0.0)
+    encodeClearDraw(
+        encoder: encoder,
+        pipeline: pipeline,
+        textureWidth: textureWidth,
+        textureHeight: textureHeight,
+        clearColor: clearColor,
+        scissorRect: scissorRect,
+        depthState: depthState,
+        clearDepth: clearDepth
     )
-
-    encoder.setRenderPipelineState(pipeline)
-    encoder.setDepthStencilState(depthState)
-    withUnsafeBytes(of: &uniforms) { bytes in
-        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-    }
-    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     encoder.endEncoding()
 
     keepObjectAliveUntilCompleted(commandBuffer, colorTexture)

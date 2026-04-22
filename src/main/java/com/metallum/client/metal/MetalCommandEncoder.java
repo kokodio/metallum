@@ -42,7 +42,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 
 	@Override
 	public void submit() {
-		//this.submitRenderPass();
 		int result = MetalNativeBridge.INSTANCE.metallum_signal_submit(this.device.commandQueue(), this.currentSubmitIndex);
 		if (result != 0) {
 			throw new IllegalStateException("Failed to signal Metal submit " + this.currentSubmitIndex + " (code " + result + ")");
@@ -63,7 +62,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		final OptionalDouble clearDepth,
 		final RenderPass.RenderArea renderArea
 	) {
-		//this.submitRenderPass();
 		ResolvedColorClear resolvedColorClear = this.resolveColorAttachmentClear(colorTexture, clearColor, renderArea);
 		ResolvedDepthClear resolvedDepthClear = depthTexture == null ? ResolvedDepthClear.disabled() : this.resolveDepthAttachmentClear(depthTexture, clearDepth, renderArea);
 		return this.currentRenderPass = new MetalRenderPass(
@@ -115,7 +113,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 	) {
 		MetalGpuTexture color = castTexture(colorTexture);
 		MetalGpuTexture depth = castTexture(depthTexture);
-		//this.submitRenderPass();
 		int result = MetalNativeBridge.INSTANCE.metallum_clear_color_depth_textures_region(
 				this.device.commandQueue(),
 				color.nativeHandle(),
@@ -211,8 +208,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		final int sourceX,
 		final int sourceY
 	) {
-		//this.submitRenderPass();
-		this.flushPendingClear(castTexture(destination));
 		ByteBuffer sourceBytes = MemoryUtil.memByteBuffer(source.getPointer(), source.getWidth() * source.getHeight() * source.format().components());
 		this.writeToTextureFromRows(castTexture(destination), sourceBytes, source.format(), mipLevel, depthOrLayer, destX, destY, width, height, source.getWidth(), sourceX, sourceY);
 	}
@@ -229,8 +224,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		final int width,
 		final int height
 	) {
-		//this.submitRenderPass();
-		this.flushPendingClear(castTexture(destination));
 		this.writeToTextureFromRows(castTexture(destination), source.duplicate(), format, mipLevel, depthOrLayer, destX, destY, width, height, width, 0, 0);
 	}
 
@@ -251,7 +244,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		final int width,
 		final int height
 	) {
-		//this.submitRenderPass();
 		MetalGpuTexture texture = castTexture(source);
 		this.flushPendingClear(texture);
 		MetalGpuBuffer buffer = castBuffer(destination);
@@ -292,7 +284,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		final int width,
 		final int height
 	) {
-		//this.submitRenderPass();
 		MetalGpuTexture srcTexture = castTexture(source);
 		MetalGpuTexture dstTexture = castTexture(destination);
 		this.flushPendingClear(srcTexture);
@@ -349,7 +340,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 	}
 
 	void close() {
-		//this.submitRenderPass();
 		this.destroyQueue.close();
 	}
 
@@ -478,7 +468,9 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 	}
 
 	private static boolean isFullTextureView(final GpuTextureView textureView) {
-		return textureView.baseMipLevel() == 0 && textureView.mipLevels() >= textureView.texture().getMipLevels();
+		return textureView.baseMipLevel() == 0
+			&& textureView.mipLevels() >= textureView.texture().getMipLevels()
+			&& textureView.texture().getDepthOrLayers() == 1;
 	}
 
 	private static final class PendingTextureClear {
@@ -517,6 +509,7 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		if (width <= 0 || height <= 0) {
 			return;
 		}
+		this.flushPendingClear(destination);
 
 		int pixelSize = destination.pixelSize();
 		int rowBytes = width * pixelSize;
