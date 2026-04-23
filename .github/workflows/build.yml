@@ -4,6 +4,7 @@
 # against bad commits.
 
 name: build
+run-name: ${{ github.ref_name }}
 on:
   push:
     tags:
