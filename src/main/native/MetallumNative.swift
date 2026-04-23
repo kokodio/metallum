@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 import Metal
 import QuartzCore
 import simd
@@ -60,13 +61,11 @@ private final class SubmitMarker {
 }
 
 private final class SubmitTracker {
-    let condition = NSCondition()
+    let lock = NSLock()
     var inFlightMarkers: [SubmitMarker] = []
     var completedSubmitIndex: UInt64 = 1
-    var submittedSubmitIndex: UInt64 = 1
     var nextCommandBufferSerial: UInt64 = 1
     var pendingCommandBuffer: MTLCommandBuffer?
-    var pendingPresentDrawable: CAMetalDrawable?
     var pendingRenderPass: RenderPassSession?
 }
 
@@ -371,17 +370,6 @@ private func textureLabel(_ texture: MTLTexture?) -> String {
     return "\(texture.width)x\(texture.height) \(texture.pixelFormat)"
 }
 
-private func makeLabeledCommandBuffer(_ queue: MTLCommandQueue, purpose: String) -> MTLCommandBuffer? {
-    guard let commandBuffer = queue.makeCommandBuffer() else {
-        return nil
-    }
-    let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    labelCommandBuffer(commandBuffer, tracker: tracker, purpose: purpose)
-    tracker.condition.unlock()
-    return commandBuffer
-}
-
 private func labelCommandBuffer(_ commandBuffer: MTLCommandBuffer, tracker: SubmitTracker, purpose: String) {
     let serial = tracker.nextCommandBufferSerial
     tracker.nextCommandBufferSerial += 1
@@ -482,8 +470,8 @@ private func finishPendingRenderPassLocked(_ tracker: SubmitTracker) {
 
 private func submissionCommandBufferForStandaloneEncoding(_ queue: MTLCommandQueue) -> MTLCommandBuffer? {
     let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    defer { tracker.condition.unlock() }
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
     let commandBuffer = ensureSubmissionCommandBufferLocked(queue, tracker)
     finishPendingRenderPassLocked(tracker)
     return commandBuffer
@@ -506,8 +494,8 @@ private func reusePendingRenderPassIfCompatible(
     viewportHeight: Double
 ) -> RenderPassSession? {
     let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    defer { tracker.condition.unlock() }
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
     guard let session = tracker.pendingRenderPass,
           canReuseRenderPass(
             session,
@@ -564,8 +552,8 @@ private func encodeClearDraw(
 
 private func takeSubmissionCommandBufferForSubmit(_ queue: MTLCommandQueue) -> MTLCommandBuffer? {
     let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    defer { tracker.condition.unlock() }
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
     _ = ensureSubmissionCommandBufferLocked(queue, tracker)
     finishPendingRenderPassLocked(tracker)
     let commandBuffer = tracker.pendingCommandBuffer
@@ -589,35 +577,57 @@ private func keepResourceAliveUntilCompleted(_ session: RenderPassSession?, _ re
     keepObjectAliveUntilCompleted(session.commandBuffer, resource)
 }
 
-private func attachPendingPresentDrawable(_ queue: MTLCommandQueue, _ commandBuffer: MTLCommandBuffer) {
+private func commandBufferForFramePresentEncoding(_ queue: MTLCommandQueue) -> MTLCommandBuffer? {
     let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    let drawable = tracker.pendingPresentDrawable
-    tracker.pendingPresentDrawable = nil
-    tracker.condition.unlock()
-    if let drawable {
-        keepObjectAliveUntilCompleted(commandBuffer, drawable)
-        commandBuffer.present(drawable)
-    }
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
+    finishPendingRenderPassLocked(tracker)
+    return ensureSubmissionCommandBufferLocked(queue, tracker)
 }
 
-private func queueDrawablePresent(_ queue: MTLCommandQueue, _ drawable: CAMetalDrawable) -> Int32 {
-    let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    if tracker.pendingCommandBuffer != nil {
-        tracker.pendingPresentDrawable = drawable
-        tracker.condition.unlock()
-        return 0
+private func encodeTextureToDrawable(
+    commandBuffer: MTLCommandBuffer,
+    device: MTLDevice,
+    drawable: CAMetalDrawable,
+    sourceTexture: MTLTexture
+) -> Bool {
+    guard let pipeline = ensurePresentPipeline(device, drawable.texture.pixelFormat) else {
+        return false
     }
-    tracker.condition.unlock()
 
-    guard let commandBuffer = makeLabeledCommandBuffer(queue, purpose: "Present") else {
-        return 1
+    let renderPass = MTLRenderPassDescriptor()
+    renderPass.colorAttachments[0].texture = drawable.texture
+    renderPass.colorAttachments[0].loadAction = .dontCare
+    renderPass.colorAttachments[0].storeAction = .store
+    guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
+        return false
     }
-    keepObjectAliveUntilCompleted(commandBuffer, drawable)
-    commandBuffer.present(drawable)
-    commandBuffer.commit()
-    return 0
+    setRenderEncoderLabel(encoder, "present \(textureLabel(sourceTexture)) -> drawable")
+
+    let w = Float(drawable.texture.width)
+    let h = Float(drawable.texture.height)
+    var uniforms = MetallumFullscreenUniforms(
+        viewportSize: SIMD2<Float>(w, h),
+        z: 0.0,
+        _padding0: 0.0,
+        color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0),
+        uvMin: SIMD2<Float>(0.0, 1.0),
+        uvMax: SIMD2<Float>(1.0, 0.0)
+    )
+
+    encoder.setRenderPipelineState(pipeline)
+    withUnsafeBytes(of: &uniforms) { bytes in
+        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
+    }
+    encoder.setFragmentTexture(sourceTexture, index: 0)
+    let requiresScaling = sourceTexture.width != drawable.texture.width || sourceTexture.height != drawable.texture.height
+    let sampler = requiresScaling ? ensurePresentLinearSampler(device) : ensurePresentNearestSampler(device)
+    if let sampler {
+        encoder.setFragmentSamplerState(sampler, index: 0)
+    }
+    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+    encoder.endEncoding()
+    return true
 }
 
 private func signalSubmit(_ queue: MTLCommandQueue, submitIndex: UInt64) -> Int32 {
@@ -627,24 +637,59 @@ private func signalSubmit(_ queue: MTLCommandQueue, submitIndex: UInt64) -> Int3
         return 1
     }
 
-    attachPendingPresentDrawable(queue, commandBuffer)
     let marker = SubmitMarker(commandBuffer: commandBuffer, submitIndex: submitIndex)
 
-    tracker.condition.lock()
-    tracker.submittedSubmitIndex = maxUInt64(tracker.submittedSubmitIndex, submitIndex)
+    tracker.lock.lock()
     tracker.inFlightMarkers.append(marker)
-    tracker.condition.unlock()
+    tracker.lock.unlock()
 
     commandBuffer.addCompletedHandler { _ in
-        tracker.condition.lock()
-        tracker.completedSubmitIndex = maxUInt64(tracker.completedSubmitIndex, submitIndex)
-        tracker.inFlightMarkers.removeAll { $0 === marker }
-        tracker.condition.broadcast()
-        tracker.condition.unlock()
+        tracker.lock.lock()
+        markSubmitMarkerCompletedLocked(tracker, marker)
+        tracker.lock.unlock()
     }
 
     commandBuffer.commit()
     return 0
+}
+
+private func isCommandBufferTerminal(_ commandBuffer: MTLCommandBuffer) -> Bool {
+    switch commandBuffer.status {
+    case .completed, .error:
+        return true
+    default:
+        return false
+    }
+}
+
+private func markSubmitMarkerCompletedLocked(_ tracker: SubmitTracker, _ marker: SubmitMarker) {
+    tracker.completedSubmitIndex = maxUInt64(tracker.completedSubmitIndex, marker.submitIndex)
+    tracker.inFlightMarkers.removeAll { $0 === marker }
+}
+
+private func refreshCompletedSubmitsLocked(_ tracker: SubmitTracker) {
+    var completedSubmitIndex = tracker.completedSubmitIndex
+    tracker.inFlightMarkers.removeAll { marker in
+        if isCommandBufferTerminal(marker.commandBuffer) {
+            completedSubmitIndex = maxUInt64(completedSubmitIndex, marker.submitIndex)
+            return true
+        }
+        return false
+    }
+    tracker.completedSubmitIndex = completedSubmitIndex
+}
+
+private func markSubmitMarkerCompleted(_ tracker: SubmitTracker, _ marker: SubmitMarker) {
+    tracker.lock.lock()
+    markSubmitMarkerCompletedLocked(tracker, marker)
+    tracker.lock.unlock()
+}
+
+private func submitWaitDeadline(timeoutMs: UInt64) -> UInt64 {
+    let now = DispatchTime.now().uptimeNanoseconds
+    let timeoutNs = timeoutMs > UInt64.max / 1_000_000 ? UInt64.max : timeoutMs * 1_000_000
+    let result = now.addingReportingOverflow(timeoutNs)
+    return result.overflow ? UInt64.max : result.partialValue
 }
 
 private func waitForSubmitCompletion(_ queue: MTLCommandQueue, submitIndex: UInt64, timeoutMs: UInt64) -> Int32 {
@@ -653,27 +698,61 @@ private func waitForSubmitCompletion(_ queue: MTLCommandQueue, submitIndex: UInt
     }
 
     let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
+    tracker.lock.lock()
+    refreshCompletedSubmitsLocked(tracker)
     if tracker.completedSubmitIndex >= submitIndex {
-        tracker.condition.unlock()
+        tracker.lock.unlock()
         return 0
     }
+    let marker = tracker.inFlightMarkers.first { $0.submitIndex == submitIndex }
+    tracker.lock.unlock()
+
+    if let marker {
+        if timeoutMs == 0 {
+            if isCommandBufferTerminal(marker.commandBuffer) {
+                markSubmitMarkerCompleted(tracker, marker)
+                return 0
+            }
+            return 1
+        }
+
+        let deadline = submitWaitDeadline(timeoutMs: timeoutMs)
+        var spinCount: UInt32 = 0
+        while !isCommandBufferTerminal(marker.commandBuffer) {
+            spinCount &+= 1
+            if spinCount & 0x3ff == 0 && DispatchTime.now().uptimeNanoseconds >= deadline {
+                return 1
+            }
+        }
+        markSubmitMarkerCompleted(tracker, marker)
+        return 0
+    }
+
     if timeoutMs == 0 {
-        tracker.condition.unlock()
         return 1
     }
 
-    let deadline = Date(timeIntervalSinceNow: TimeInterval(timeoutMs) / 1000.0)
-    while tracker.completedSubmitIndex < submitIndex {
-        if !tracker.condition.wait(until: deadline) {
-            let result: Int32 = tracker.completedSubmitIndex >= submitIndex ? 0 : 1
-            tracker.condition.unlock()
-            return result
+    let deadline = submitWaitDeadline(timeoutMs: timeoutMs)
+    var spinCount: UInt32 = 0
+    while true {
+        tracker.lock.lock()
+        refreshCompletedSubmitsLocked(tracker)
+        if tracker.completedSubmitIndex >= submitIndex {
+            tracker.lock.unlock()
+            return 0
+        }
+        tracker.lock.unlock()
+
+        spinCount &+= 1
+        if spinCount & 0x3ff == 0 && DispatchTime.now().uptimeNanoseconds >= deadline {
+            return 1
         }
     }
+}
 
-    tracker.condition.unlock()
-    return 0
+private func spinUntilCommandBufferTerminal(_ commandBuffer: MTLCommandBuffer) {
+    while !isCommandBufferTerminal(commandBuffer) {
+    }
 }
 
 private func buildGuiPipeline(device: MTLDevice, textured: Bool, colorFormat: MTLPixelFormat, depthFormat: MTLPixelFormat = .invalid) -> MTLRenderPipelineState? {
@@ -1405,8 +1484,8 @@ public func metallum_begin_render_pass(
     }
 
     let tracker = submitTracker(for: queue)
-    tracker.condition.lock()
-    defer { tracker.condition.unlock() }
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
     finishPendingRenderPassLocked(tracker)
     guard let commandBuffer = ensureSubmissionCommandBufferLocked(queue, tracker) else {
         return nil
@@ -1783,85 +1862,32 @@ public func metallum_configure_layer(_ layerPtr: UnsafeMutableRawPointer?, _ wid
     return 0
 }
 
-@_cdecl("metallum_acquire_next_drawable")
-public func metallum_acquire_next_drawable(_ layerPtr: UnsafeMutableRawPointer?) -> UnsafeMutableRawPointer? {
-    guard let layer: CAMetalLayer = object(layerPtr), let drawable = layer.nextDrawable() else {
-        return nil
-    }
-    return retainedPointer(drawable)
-}
-
-@_cdecl("metallum_copy_texture_to_drawable")
-public func metallum_copy_texture_to_drawable(
+@_cdecl("metallum_enqueue_present_texture_to_layer")
+public func metallum_enqueue_present_texture_to_layer(
     _ commandQueuePtr: UnsafeMutableRawPointer?,
-    _ drawablePtr: UnsafeMutableRawPointer?,
+    _ layerPtr: UnsafeMutableRawPointer?,
     _ sourceTexturePtr: UnsafeMutableRawPointer?
 ) -> Int32 {
     guard
         let queue: MTLCommandQueue = object(commandQueuePtr),
-        let drawable: CAMetalDrawable = object(drawablePtr),
+        let layer: CAMetalLayer = object(layerPtr),
         let sourceTexture: MTLTexture = object(sourceTexturePtr)
     else {
         return 1
     }
     guard
-        let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue),
-        let pipeline = ensurePresentPipeline(queue.device, drawable.texture.pixelFormat)
+        let drawable = layer.nextDrawable(),
+        let commandBuffer = commandBufferForFramePresentEncoding(queue)
     else {
         return 1
     }
-
-    let renderPass = MTLRenderPassDescriptor()
-    renderPass.colorAttachments[0].texture = drawable.texture
-    renderPass.colorAttachments[0].loadAction = .dontCare
-    renderPass.colorAttachments[0].storeAction = .store
-    guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
+    guard encodeTextureToDrawable(commandBuffer: commandBuffer, device: queue.device, drawable: drawable, sourceTexture: sourceTexture) else {
         return 1
     }
-    setRenderEncoderLabel(encoder, "present \(textureLabel(sourceTexture)) -> drawable")
-
-    let w = Float(drawable.texture.width)
-    let h = Float(drawable.texture.height)
-    var uniforms = MetallumFullscreenUniforms(
-        viewportSize: SIMD2<Float>(w, h),
-        z: 0.0,
-        _padding0: 0.0,
-        color: SIMD4<Float>(1.0, 1.0, 1.0, 1.0),
-        uvMin: SIMD2<Float>(0.0, 1.0),
-        uvMax: SIMD2<Float>(1.0, 0.0)
-    )
-
-    encoder.setRenderPipelineState(pipeline)
-    withUnsafeBytes(of: &uniforms) { bytes in
-        encoder.setVertexBytes(bytes.baseAddress!, length: bytes.count, index: 1)
-    }
-    encoder.setFragmentTexture(sourceTexture, index: 0)
-    let requiresScaling = sourceTexture.width != drawable.texture.width || sourceTexture.height != drawable.texture.height
-    let sampler = requiresScaling ? ensurePresentLinearSampler(queue.device) : ensurePresentNearestSampler(queue.device)
-    if let sampler {
-        encoder.setFragmentSamplerState(sampler, index: 0)
-    }
-    encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
-    encoder.endEncoding()
-
     keepObjectAliveUntilCompleted(commandBuffer, drawable)
     keepObjectAliveUntilCompleted(commandBuffer, sourceTexture)
+    commandBuffer.present(drawable)
     return 0
-}
-
-@_cdecl("metallum_present_drawable")
-public func metallum_present_drawable(_ commandQueuePtr: UnsafeMutableRawPointer?, _ drawablePtr: UnsafeMutableRawPointer?) -> Int32 {
-    guard let drawablePtr else {
-        return 1
-    }
-    guard let queue: MTLCommandQueue = object(commandQueuePtr), let drawable: CAMetalDrawable = object(drawablePtr) else {
-        Unmanaged<AnyObject>.fromOpaque(drawablePtr).release()
-        return 1
-    }
-
-    let result = queueDrawablePresent(queue, drawable)
-    Unmanaged<AnyObject>.fromOpaque(drawablePtr).release()
-    return result
 }
 
 @_cdecl("metallum_release_object")
@@ -1893,9 +1919,8 @@ public func metallum_wait_for_command_queue_idle(_ commandQueuePtr: UnsafeMutabl
     guard let queue: MTLCommandQueue = object(commandQueuePtr), let commandBuffer = takeSubmissionCommandBufferForSubmit(queue) else {
         return 1
     }
-    attachPendingPresentDrawable(queue, commandBuffer)
     commandBuffer.commit()
-    commandBuffer.waitUntilCompleted()
+    spinUntilCommandBufferTerminal(commandBuffer)
     return 0
 }
 

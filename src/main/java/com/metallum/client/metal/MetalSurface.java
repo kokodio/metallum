@@ -10,8 +10,6 @@ import java.util.EnumSet;
 import java.util.Set;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
-import com.sun.jna.Pointer;
-import org.jspecify.annotations.Nullable;
 
 @Environment(EnvType.CLIENT)
 final class MetalSurface implements GpuSurfaceBackend {
@@ -20,9 +18,6 @@ final class MetalSurface implements GpuSurfaceBackend {
 	private final MetalDevice device;
 	private final MetalCocoaBootstrap.BootstrapContext bootstrap;
 	private GpuSurface.Configuration configuration;
-	@Nullable
-	private Pointer currentDrawable;
-	private boolean blittedToDrawable;
 
 	MetalSurface(final long windowHandle, final MetalDevice device, final MetalCocoaBootstrap.BootstrapContext bootstrap) {
 		this.windowHandle = windowHandle;
@@ -59,59 +54,31 @@ final class MetalSurface implements GpuSurfaceBackend {
 		if (this.configuration == null) {
 			throw new SurfaceException("Metal surface must be configured before acquire");
 		}
-		if (this.currentDrawable != null) {
-			MetalNativeBridge.INSTANCE.metallum_release_object(this.currentDrawable);
-			this.currentDrawable = null;
-		}
-		this.blittedToDrawable = false;
 	}
 
 	@Override
 	public void blitFromTexture(final CommandEncoderBackend commandEncoder, final GpuTextureView textureView) {
-		if (this.currentDrawable == null) {
-			this.currentDrawable = MetalNativeBridge.INSTANCE.metallum_acquire_next_drawable(this.bootstrap.metalLayer());
-			if (MetalProbe.isNullPointer(this.currentDrawable)) {
-				this.currentDrawable = null;
-				throw new IllegalStateException("Failed to acquire CAMetalDrawable for Metal blit");
-			}
-		}
-
 		if (commandEncoder instanceof MetalCommandEncoder metalEncoder) {
 			metalEncoder.flushPendingTextureViewClear(textureView);
 		}
 
 		MetalGpuTexture source = (MetalGpuTexture)textureView.texture();
-		int result = MetalNativeBridge.INSTANCE.metallum_copy_texture_to_drawable(
+		int result = MetalNativeBridge.INSTANCE.metallum_enqueue_present_texture_to_layer(
 			this.device.commandQueue(),
-			this.currentDrawable,
+			this.bootstrap.metalLayer(),
 			source.nativeHandle()
 		);
 		if (result != 0) {
-			throw new IllegalStateException("Failed to blit Metal texture '" + source.getLabel() + "' to drawable (code " + result + ")");
+			throw new IllegalStateException("Failed to enqueue Metal present for texture '" + source.getLabel() + "' (code " + result + ")");
 		}
-		this.blittedToDrawable = true;
 	}
 
 	@Override
 	public void present() {
-		if (this.currentDrawable != null) {
-			if (this.blittedToDrawable) {
-				MetalNativeBridge.INSTANCE.metallum_present_drawable(this.device.commandQueue(), this.currentDrawable);
-			} else {
-				MetalNativeBridge.INSTANCE.metallum_release_object(this.currentDrawable);
-			}
-			this.currentDrawable = null;
-		}
-		this.blittedToDrawable = false;
 	}
 
 	@Override
 	public void close() {
-		if (this.currentDrawable != null) {
-			MetalNativeBridge.INSTANCE.metallum_release_object(this.currentDrawable);
-			this.currentDrawable = null;
-		}
-		this.blittedToDrawable = false;
 	}
 
 	@Override

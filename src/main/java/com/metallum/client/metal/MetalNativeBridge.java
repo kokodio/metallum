@@ -30,9 +30,7 @@ final class MetalNativeBridge {
 	private final Arena libraryArena;
 	private final MethodHandle createSystemDefaultDevice;
 	private final MethodHandle createCommandQueue;
-	private final MethodHandle acquireNextDrawable;
-	private final MethodHandle copyTextureToDrawable;
-	private final MethodHandle presentDrawable;
+	private final MethodHandle enqueuePresentTextureToLayer;
 	private final MethodHandle createBuffer;
 	private final MethodHandle uploadBufferRegionAsync;
 	private final MethodHandle copyBufferToBuffer;
@@ -73,9 +71,7 @@ final class MetalNativeBridge {
 		this.libraryArena = libraryArena;
 		this.createSystemDefaultDevice = downcall(lookup, "metallum_create_system_default_device", FunctionDescriptor.of(ValueLayout.ADDRESS));
 		this.createCommandQueue = downcall(lookup, "metallum_create_command_queue", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-		this.acquireNextDrawable = downcall(lookup, "metallum_acquire_next_drawable", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-		this.copyTextureToDrawable = downcall(lookup, "metallum_copy_texture_to_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
-		this.presentDrawable = downcall(lookup, "metallum_present_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+		this.enqueuePresentTextureToLayer = downcall(lookup, "metallum_enqueue_present_texture_to_layer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.createBuffer = downcall(lookup, "metallum_create_buffer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, ValueLayout.ADDRESS));
 		this.uploadBufferRegionAsync = downcall(lookup, "metallum_upload_buffer_region_async", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG));
 		this.copyBufferToBuffer = downcall(lookup, "metallum_copy_buffer_to_buffer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG, LONG));
@@ -219,30 +215,6 @@ final class MetalNativeBridge {
 			return toPointer((MemorySegment)this.createCommandQueue.invokeExact(toSegment(device)));
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_create_command_queue", throwable);
-		}
-	}
-
-	Pointer metallum_acquire_next_drawable(final Pointer layer) {
-		try {
-			return toPointer((MemorySegment)this.acquireNextDrawable.invokeExact(toSegment(layer)));
-		} catch (Throwable throwable) {
-			throw bridgeFailure("metallum_acquire_next_drawable", throwable);
-		}
-	}
-
-	int metallum_copy_texture_to_drawable(final Pointer commandQueue, final Pointer drawable, final Pointer sourceTexture) {
-		try {
-			return (int)this.copyTextureToDrawable.invokeExact(toSegment(commandQueue), toSegment(drawable), toSegment(sourceTexture));
-		} catch (Throwable throwable) {
-			throw bridgeFailure("metallum_copy_texture_to_drawable", throwable);
-		}
-	}
-
-	int metallum_present_drawable(final Pointer commandQueue, final Pointer drawable) {
-		try {
-			return (int)this.presentDrawable.invokeExact(toSegment(commandQueue), toSegment(drawable));
-		} catch (Throwable throwable) {
-			throw bridgeFailure("metallum_present_drawable", throwable);
 		}
 	}
 
@@ -719,6 +691,14 @@ final class MetalNativeBridge {
 			return (int)this.configureLayer.invokeExact(toSegment(layer), width, height, immediatePresentMode);
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_configure_layer", throwable);
+		}
+	}
+
+	int metallum_enqueue_present_texture_to_layer(final Pointer commandQueue, final Pointer layer, final Pointer sourceTexture) {
+		try {
+			return (int)this.enqueuePresentTextureToLayer.invokeExact(toSegment(commandQueue), toSegment(layer), toSegment(sourceTexture));
+		} catch (Throwable throwable) {
+			throw bridgeFailure("metallum_enqueue_present_texture_to_layer", throwable);
 		}
 	}
 
