@@ -6,6 +6,9 @@ import simd
 
 private let metallumVertexBufferSlot = 30
 private let metallumMaxSubmitsInFlight = 2
+private let metallumResourceHazardTrackingModeUntrackedOptionRaw: UInt = 1 << 8
+private let metallumSharedUntrackedResourceOptions = MTLResourceOptions(rawValue: metallumResourceHazardTrackingModeUntrackedOptionRaw)
+private let metallumRenderHazardFenceStages = MTLRenderStages(rawValue: 3)
 
 private struct MetallumFullscreenUniforms {
     var viewportSize: SIMD2<Float>
@@ -67,6 +70,8 @@ private final class SubmitTracker {
     var nextCommandBufferSerial: UInt64 = 1
     var pendingCommandBuffer: MTLCommandBuffer?
     var pendingRenderPass: RenderPassSession?
+    var manualHazardFence: MTLFence?
+    var manualHazardFenceReady = false
 }
 
 private final class RenderPassSession {
@@ -75,8 +80,6 @@ private final class RenderPassSession {
     let device: MTLDevice
     let colorAttachmentAddress: UInt
     let depthAttachmentAddress: UInt
-    var indexBuffer: MTLBuffer?
-    var indexType: UInt64 = 0
     let colorFormat: MTLPixelFormat
     let depthFormat: MTLPixelFormat
     let stencilFormat: MTLPixelFormat
@@ -464,8 +467,71 @@ private func finishPendingRenderPassLocked(_ tracker: SubmitTracker) {
     guard let session = tracker.pendingRenderPass else {
         return
     }
+    updateManualHazardFenceLocked(session.encoder, tracker: tracker, device: session.device)
     session.encoder.endEncoding()
     tracker.pendingRenderPass = nil
+}
+
+private func manualHazardFenceLocked(_ tracker: SubmitTracker, device: MTLDevice) -> MTLFence? {
+    if tracker.manualHazardFence == nil {
+        tracker.manualHazardFence = device.makeFence()
+        tracker.manualHazardFence?.label = "Metallum manual hazard fence"
+    }
+    return tracker.manualHazardFence
+}
+
+private func waitForManualHazardFenceLocked(_ encoder: MTLBlitCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    guard tracker.manualHazardFenceReady, let fence = manualHazardFenceLocked(tracker, device: device) else {
+        return
+    }
+    encoder.waitForFence(fence)
+}
+
+private func updateManualHazardFenceLocked(_ encoder: MTLBlitCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    guard let fence = manualHazardFenceLocked(tracker, device: device) else {
+        return
+    }
+    encoder.updateFence(fence)
+    tracker.manualHazardFenceReady = true
+}
+
+private func waitForManualHazardFenceLocked(_ encoder: MTLRenderCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    guard tracker.manualHazardFenceReady, let fence = manualHazardFenceLocked(tracker, device: device) else {
+        return
+    }
+    encoder.waitForFence(fence, before: metallumRenderHazardFenceStages)
+}
+
+private func updateManualHazardFenceLocked(_ encoder: MTLRenderCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    guard let fence = manualHazardFenceLocked(tracker, device: device) else {
+        return
+    }
+    encoder.updateFence(fence, after: metallumRenderHazardFenceStages)
+    tracker.manualHazardFenceReady = true
+}
+
+private func waitForManualHazardFence(_ encoder: MTLBlitCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
+    waitForManualHazardFenceLocked(encoder, tracker: tracker, device: device)
+}
+
+private func updateManualHazardFence(_ encoder: MTLBlitCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
+    updateManualHazardFenceLocked(encoder, tracker: tracker, device: device)
+}
+
+private func waitForManualHazardFence(_ encoder: MTLRenderCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
+    waitForManualHazardFenceLocked(encoder, tracker: tracker, device: device)
+}
+
+private func updateManualHazardFence(_ encoder: MTLRenderCommandEncoder, tracker: SubmitTracker, device: MTLDevice) {
+    tracker.lock.lock()
+    defer { tracker.lock.unlock() }
+    updateManualHazardFenceLocked(encoder, tracker: tracker, device: device)
 }
 
 private func submissionCommandBufferForStandaloneEncoding(_ queue: MTLCommandQueue) -> MTLCommandBuffer? {
@@ -512,8 +578,6 @@ private func reusePendingRenderPassIfCompatible(
 private func prepareRenderPassSessionForReuse(_ session: RenderPassSession, viewportWidth: Double, viewportHeight: Double) {
     session.viewportWidth = viewportWidth
     session.viewportHeight = viewportHeight
-    session.indexBuffer = nil
-    session.indexType = 0
     session.flipVertexY = false
     session.encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: viewportWidth, height: viewportHeight, znear: 0.0, zfar: 1.0))
 }
@@ -589,7 +653,8 @@ private func encodeTextureToDrawable(
     commandBuffer: MTLCommandBuffer,
     device: MTLDevice,
     drawable: CAMetalDrawable,
-    sourceTexture: MTLTexture
+    sourceTexture: MTLTexture,
+    hazardTracker: SubmitTracker
 ) -> Bool {
     guard let pipeline = ensurePresentPipeline(device, drawable.texture.pixelFormat) else {
         return false
@@ -602,6 +667,7 @@ private func encodeTextureToDrawable(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return false
     }
+    waitForManualHazardFence(encoder, tracker: hazardTracker, device: device)
     setRenderEncoderLabel(encoder, "present \(textureLabel(sourceTexture)) -> drawable")
 
     let w = Float(drawable.texture.width)
@@ -626,6 +692,7 @@ private func encodeTextureToDrawable(
         encoder.setFragmentSamplerState(sampler, index: 0)
     }
     encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+    updateManualHazardFence(encoder, tracker: hazardTracker, device: device)
     encoder.endEncoding()
     return true
 }
@@ -1055,7 +1122,7 @@ private func createSequentialTriangleFanIndexBuffer(session: RenderPassSession, 
     }
 
     return indices.withUnsafeBytes { bytes in
-        guard let buffer = session.device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared) else {
+        guard let buffer = session.device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: metallumSharedUntrackedResourceOptions) else {
             return nil
         }
         return (buffer, Int(generatedIndexCount))
@@ -1070,8 +1137,14 @@ private func readIndex(_ indexBuffer: MTLBuffer, byteOffset: UInt64, index: UInt
     return base.assumingMemoryBound(to: UInt32.self)[Int(index)]
 }
 
-private func createIndexedTriangleFanIndexBuffer(session: RenderPassSession, indexOffsetBytes: UInt64, indexCount: UInt64) -> (MTLBuffer, Int)? {
-    guard indexCount >= 3, let sourceIndexBuffer = session.indexBuffer else {
+private func createIndexedTriangleFanIndexBuffer(
+    session: RenderPassSession,
+    sourceIndexBuffer: MTLBuffer,
+    indexType: UInt64,
+    indexOffsetBytes: UInt64,
+    indexCount: UInt64
+) -> (MTLBuffer, Int)? {
+    guard indexCount >= 3 else {
         return nil
     }
     let triangleCount = indexCount - 2
@@ -1080,17 +1153,17 @@ private func createIndexedTriangleFanIndexBuffer(session: RenderPassSession, ind
         return nil
     }
 
-    let center = readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: 0, indexType: session.indexType)
+    let center = readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: 0, indexType: indexType)
     var indices = [UInt32]()
     indices.reserveCapacity(Int(generatedCount))
     for triangle in 0..<triangleCount {
         indices.append(center)
-        indices.append(readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 1, indexType: session.indexType))
-        indices.append(readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 2, indexType: session.indexType))
+        indices.append(readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 1, indexType: indexType))
+        indices.append(readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 2, indexType: indexType))
     }
 
     return indices.withUnsafeBytes { bytes in
-        guard let buffer = session.device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: .storageModeShared) else {
+        guard let buffer = session.device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: metallumSharedUntrackedResourceOptions) else {
             return nil
         }
         return (buffer, Int(generatedCount))
@@ -1120,7 +1193,7 @@ public func metallum_create_buffer(
     guard let device: MTLDevice = object(devicePtr) else {
         return nil
     }
-    guard let buffer = device.makeBuffer(length: Int(length), options: MTLResourceOptions(rawValue: UInt(options))) else {
+    guard let buffer = device.makeBuffer(length: Int(length), options: MTLResourceOptions(rawValue: UInt(options) | metallumResourceHazardTrackingModeUntrackedOptionRaw)) else {
         return nil
     }
     buffer.label = stringFromOptionalCString(labelPtr)
@@ -1167,6 +1240,7 @@ public func metallum_create_texture_2d(
     descriptor.mipmapLevelCount = max(Int(mipLevels), 1)
     descriptor.usage = MTLTextureUsage(rawValue: UInt(usage))
     descriptor.storageMode = MTLStorageMode(rawValue: UInt(storageMode)) ?? .shared
+    descriptor.hazardTrackingMode = .untracked
     guard let texture = device.makeTexture(descriptor: descriptor) else {
         return nil
     }
@@ -1217,6 +1291,7 @@ public func metallum_create_buffer_texture_view(
     )
     descriptor.usage = MTLTextureUsage.shaderRead
     descriptor.storageMode = buffer.storageMode
+    descriptor.hazardTrackingMode = .untracked
 
     let nativeOffset = Int(offset)
     let nativeBytesPerRow = Int(bytesPerRow)
@@ -1249,14 +1324,17 @@ public func metallum_upload_buffer_region_async(
         return 1
     }
 
-    guard let stagingBuffer = queue.device.makeBuffer(bytes: bytes, length: Int(length), options: .storageModeShared) else {
+    guard let stagingBuffer = queue.device.makeBuffer(bytes: bytes, length: Int(length), options: metallumSharedUntrackedResourceOptions) else {
         return 1
     }
+    let tracker = submitTracker(for: queue)
     guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    waitForManualHazardFence(blit, tracker: tracker, device: queue.device)
     setBlitEncoderLabel(blit, "upload buffer -> \(destinationBuffer.label ?? "buffer")")
     blit.copy(from: stagingBuffer, sourceOffset: 0, to: destinationBuffer, destinationOffset: Int(destinationOffset), size: Int(length))
+    updateManualHazardFence(blit, tracker: tracker, device: queue.device)
     blit.endEncoding()
     keepObjectAliveUntilCompleted(commandBuffer, stagingBuffer)
     keepObjectAliveUntilCompleted(commandBuffer, destinationBuffer)
@@ -1281,11 +1359,14 @@ public func metallum_copy_buffer_to_buffer(
         return 1
     }
 
+    let tracker = submitTracker(for: queue)
     guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    waitForManualHazardFence(blit, tracker: tracker, device: queue.device)
     setBlitEncoderLabel(blit, "copy buffer \(sourceBuffer.label ?? "buffer") -> \(destinationBuffer.label ?? "buffer")")
     blit.copy(from: sourceBuffer, sourceOffset: Int(sourceOffset), to: destinationBuffer, destinationOffset: Int(destinationOffset), size: Int(length))
+    updateManualHazardFence(blit, tracker: tracker, device: queue.device)
     blit.endEncoding()
     keepObjectAliveUntilCompleted(commandBuffer, sourceBuffer)
     keepObjectAliveUntilCompleted(commandBuffer, destinationBuffer)
@@ -1316,9 +1397,11 @@ public func metallum_copy_buffer_to_texture(
     else {
         return 1
     }
+    let tracker = submitTracker(for: queue)
     guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    waitForManualHazardFence(blit, tracker: tracker, device: queue.device)
     setBlitEncoderLabel(blit, "copy buffer \(sourceBuffer.label ?? "buffer") -> texture \(textureLabel(texture))")
     blit.copy(
         from: sourceBuffer,
@@ -1331,6 +1414,7 @@ public func metallum_copy_buffer_to_texture(
         destinationLevel: Int(mipLevel),
         destinationOrigin: MTLOrigin(x: Int(x), y: Int(y), z: 0)
     )
+    updateManualHazardFence(blit, tracker: tracker, device: queue.device)
     blit.endEncoding()
     keepObjectAliveUntilCompleted(commandBuffer, sourceBuffer)
     keepObjectAliveUntilCompleted(commandBuffer, texture)
@@ -1359,9 +1443,11 @@ public func metallum_copy_texture_to_texture(
     else {
         return 1
     }
+    let tracker = submitTracker(for: queue)
     guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    waitForManualHazardFence(blit, tracker: tracker, device: queue.device)
     setBlitEncoderLabel(blit, "copy texture \(textureLabel(sourceTexture)) -> \(textureLabel(destinationTexture))")
     blit.copy(
         from: sourceTexture,
@@ -1374,6 +1460,7 @@ public func metallum_copy_texture_to_texture(
         destinationLevel: Int(mipLevel),
         destinationOrigin: MTLOrigin(x: Int(destX), y: Int(destY), z: 0)
     )
+    updateManualHazardFence(blit, tracker: tracker, device: queue.device)
     blit.endEncoding()
     return 0
 }
@@ -1402,9 +1489,11 @@ public func metallum_copy_texture_to_buffer(
     else {
         return 1
     }
+    let tracker = submitTracker(for: queue)
     guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
         return 1
     }
+    waitForManualHazardFence(blit, tracker: tracker, device: queue.device)
     setBlitEncoderLabel(blit, "copy texture \(textureLabel(sourceTexture)) -> buffer \(destinationBuffer.label ?? "buffer")")
     blit.copy(
         from: sourceTexture,
@@ -1417,6 +1506,7 @@ public func metallum_copy_texture_to_buffer(
         destinationBytesPerRow: Int(bytesPerRow),
         destinationBytesPerImage: Int(bytesPerImage)
     )
+    updateManualHazardFence(blit, tracker: tracker, device: queue.device)
     blit.endEncoding()
     keepObjectAliveUntilCompleted(commandBuffer, sourceTexture)
     keepObjectAliveUntilCompleted(commandBuffer, destinationBuffer)
@@ -1472,7 +1562,7 @@ public func metallum_begin_render_pass(
     let passLabel = stringFromOptionalCString(labelPtr) ?? "render pass \(textureLabel(colorTexture))"
     let depthFormat = depthTexture?.pixelFormat ?? .invalid
     let stencilFormat = stencilPixelFormat(for: depthFormat)
-    if let session = reusePendingRenderPassIfCompatible(
+    if clearColorEnabled == 0, clearDepthEnabled == 0, let session = reusePendingRenderPassIfCompatible(
         queue,
         colorTexture: colorTexture,
         depthTexture: depthTexture,
@@ -1516,6 +1606,7 @@ public func metallum_begin_render_pass(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return nil
     }
+    waitForManualHazardFenceLocked(encoder, tracker: tracker, device: queue.device)
     setRenderEncoderLabel(encoder, passLabel)
     encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: viewportWidth, height: viewportHeight, znear: 0.0, zfar: 1.0))
 
@@ -1644,16 +1735,6 @@ public func metallum_render_pass_set_vertex_buffer(_ renderPassPtr: UnsafeMutabl
     return 0
 }
 
-@_cdecl("metallum_render_pass_set_index_buffer")
-public func metallum_render_pass_set_index_buffer(_ renderPassPtr: UnsafeMutableRawPointer?, _ bufferPtr: UnsafeMutableRawPointer?, _ indexType: UInt64) -> Int32 {
-    guard let session = renderPassSession(renderPassPtr) else {
-        return 1
-    }
-    session.indexBuffer = object(bufferPtr)
-    session.indexType = indexType
-    return 0
-}
-
 @_cdecl("metallum_render_pass_set_buffer_binding")
 public func metallum_render_pass_set_buffer_binding(
     _ renderPassPtr: UnsafeMutableRawPointer?,
@@ -1738,19 +1819,22 @@ public func metallum_render_pass_set_scissor(
 @_cdecl("metallum_render_pass_draw_indexed")
 public func metallum_render_pass_draw_indexed(
     _ renderPassPtr: UnsafeMutableRawPointer?,
+    _ indexBufferPtr: UnsafeMutableRawPointer?,
+    _ indexType: UInt64,
     _ primitiveTypeCode: UInt64,
     _ indexOffsetBytes: UInt64,
     _ indexCount: UInt64,
     _ baseVertex: Int64,
     _ instanceCount: UInt64
 ) -> Int32 {
-    guard let session = renderPassSession(renderPassPtr), let indexBuffer = session.indexBuffer else {
+    guard let session = renderPassSession(renderPassPtr), let indexBuffer: MTLBuffer = object(indexBufferPtr) else {
         return 2
     }
+    keepResourceAliveUntilCompleted(session, indexBuffer)
     session.encoder.drawIndexedPrimitives(
         type: primitiveType(from: primitiveTypeCode),
         indexCount: Int(indexCount),
-        indexType: session.indexType == 0 ? .uint16 : .uint32,
+        indexType: indexType == 0 ? .uint16 : .uint32,
         indexBuffer: indexBuffer,
         indexBufferOffset: Int(indexOffsetBytes),
         instanceCount: max(Int(instanceCount), 1),
@@ -1763,20 +1847,29 @@ public func metallum_render_pass_draw_indexed(
 @_cdecl("metallum_render_pass_draw_indexed_triangle_fan")
 public func metallum_render_pass_draw_indexed_triangle_fan(
     _ renderPassPtr: UnsafeMutableRawPointer?,
+    _ indexBufferPtr: UnsafeMutableRawPointer?,
+    _ indexType: UInt64,
     _ indexOffsetBytes: UInt64,
     _ indexCount: UInt64,
     _ baseVertex: Int64,
     _ instanceCount: UInt64
 ) -> Int32 {
-    guard let session = renderPassSession(renderPassPtr) else {
+    guard let session = renderPassSession(renderPassPtr), let indexBuffer: MTLBuffer = object(indexBufferPtr) else {
         return 1
     }
     if indexCount < 3 {
         return 0
     }
-    guard let (fanIndexBuffer, generatedIndexCount) = createIndexedTriangleFanIndexBuffer(session: session, indexOffsetBytes: indexOffsetBytes, indexCount: indexCount) else {
+    guard let (fanIndexBuffer, generatedIndexCount) = createIndexedTriangleFanIndexBuffer(
+        session: session,
+        sourceIndexBuffer: indexBuffer,
+        indexType: indexType,
+        indexOffsetBytes: indexOffsetBytes,
+        indexCount: indexCount
+    ) else {
         return 3
     }
+    keepResourceAliveUntilCompleted(session, indexBuffer)
     keepResourceAliveUntilCompleted(session, fanIndexBuffer)
     session.encoder.drawIndexedPrimitives(
         type: .triangle,
@@ -1875,13 +1968,14 @@ public func metallum_enqueue_present_texture_to_layer(
     else {
         return 1
     }
+    let tracker = submitTracker(for: queue)
     guard
         let drawable = layer.nextDrawable(),
         let commandBuffer = commandBufferForFramePresentEncoding(queue)
     else {
         return 1
     }
-    guard encodeTextureToDrawable(commandBuffer: commandBuffer, device: queue.device, drawable: drawable, sourceTexture: sourceTexture) else {
+    guard encodeTextureToDrawable(commandBuffer: commandBuffer, device: queue.device, drawable: drawable, sourceTexture: sourceTexture, hazardTracker: tracker) else {
         return 1
     }
     keepObjectAliveUntilCompleted(commandBuffer, drawable)
@@ -1938,6 +2032,7 @@ public func metallum_clear_texture(
     }
     let format = texture.pixelFormat
     let isDepthLike = format == .depth16Unorm || format == .depth32Float || format == .depth24Unorm_stencil8 || format == .depth32Float_stencil8
+    let tracker = submitTracker(for: queue)
     guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue) else {
         return 1
     }
@@ -1968,7 +2063,9 @@ public func metallum_clear_texture(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    waitForManualHazardFence(encoder, tracker: tracker, device: queue.device)
     setRenderEncoderLabel(encoder, "clear \(textureLabel(texture))")
+    updateManualHazardFence(encoder, tracker: tracker, device: queue.device)
     encoder.endEncoding()
     return 0
 }
@@ -2006,6 +2103,7 @@ public func metallum_clear_color_texture_region(
         return metallum_clear_texture(commandQueuePtr, texturePtr, 1, clearColor, 0, 1.0)
     }
 
+    let tracker = submitTracker(for: queue)
     guard
         let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue),
         let pipeline = ensureClearPipeline(queue.device, texture.pixelFormat)
@@ -2020,6 +2118,7 @@ public func metallum_clear_color_texture_region(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    waitForManualHazardFence(encoder, tracker: tracker, device: queue.device)
     setRenderEncoderLabel(encoder, "clear region \(textureLabel(texture))")
     encodeClearDraw(
         encoder: encoder,
@@ -2029,6 +2128,7 @@ public func metallum_clear_color_texture_region(
         clearColor: clearColor,
         scissorRect: scissorRect
     )
+    updateManualHazardFence(encoder, tracker: tracker, device: queue.device)
     encoder.endEncoding()
 
     keepObjectAliveUntilCompleted(commandBuffer, texture)
@@ -2050,6 +2150,7 @@ public func metallum_clear_color_depth_textures(
     else {
         return 1
     }
+    let tracker = submitTracker(for: queue)
     guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue) else {
         return 1
     }
@@ -2075,7 +2176,9 @@ public func metallum_clear_color_depth_textures(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    waitForManualHazardFence(encoder, tracker: tracker, device: queue.device)
     setRenderEncoderLabel(encoder, "clear color+depth \(textureLabel(colorTexture)) + \(textureLabel(depthTexture))")
+    updateManualHazardFence(encoder, tracker: tracker, device: queue.device)
     encoder.endEncoding()
     return 0
 }
@@ -2116,6 +2219,7 @@ public func metallum_clear_color_depth_textures_region(
         return metallum_clear_color_depth_textures(commandQueuePtr, colorTexturePtr, clearColor, depthTexturePtr, clearDepth)
     }
 
+    let tracker = submitTracker(for: queue)
     guard
         let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue),
         let pipeline = ensureClearColorDepthPipeline(queue.device, colorTexture.pixelFormat, depthTexture.pixelFormat),
@@ -2143,6 +2247,7 @@ public func metallum_clear_color_depth_textures_region(
     guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
         return 1
     }
+    waitForManualHazardFence(encoder, tracker: tracker, device: queue.device)
     setRenderEncoderLabel(encoder, "clear color+depth region \(textureLabel(colorTexture)) + \(textureLabel(depthTexture))")
     encodeClearDraw(
         encoder: encoder,
@@ -2154,6 +2259,7 @@ public func metallum_clear_color_depth_textures_region(
         depthState: depthState,
         clearDepth: clearDepth
     )
+    updateManualHazardFence(encoder, tracker: tracker, device: queue.device)
     encoder.endEncoding()
 
     keepObjectAliveUntilCompleted(commandBuffer, colorTexture)

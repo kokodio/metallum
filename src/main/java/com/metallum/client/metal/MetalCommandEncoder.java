@@ -62,8 +62,8 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		final OptionalDouble clearDepth,
 		final RenderPass.RenderArea renderArea
 	) {
-		ResolvedColorClear resolvedColorClear = this.resolveColorAttachmentClear(colorTexture, clearColor, renderArea);
-		ResolvedDepthClear resolvedDepthClear = depthTexture == null ? ResolvedDepthClear.disabled() : this.resolveDepthAttachmentClear(depthTexture, clearDepth, renderArea);
+		OptionalInt resolvedColorClear = this.resolveColorAttachmentClear(colorTexture, clearColor);
+		OptionalDouble resolvedDepthClear = depthTexture == null ? OptionalDouble.empty() : this.resolveDepthAttachmentClear(depthTexture, clearDepth);
 		return this.currentRenderPass = new MetalRenderPass(
 			this.device,
 			this,
@@ -71,10 +71,8 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 			colorTexture,
 			depthTexture,
 			renderArea,
-			resolvedColorClear.enabled(),
-			resolvedColorClear.clearColor(),
-			depthTexture != null && resolvedDepthClear.enabled(),
-			resolvedDepthClear.clearDepth()
+			resolvedColorClear,
+			resolvedDepthClear
 		);
 	}
 
@@ -113,6 +111,11 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 	) {
 		MetalGpuTexture color = castTexture(colorTexture);
 		MetalGpuTexture depth = castTexture(depthTexture);
+		if (isFullTextureRegion(color, depth, regionX, regionY, regionWidth, regionHeight)) {
+			this.deferColorClear(color, clearColor);
+			this.deferDepthClear(depth, clearDepth);
+			return;
+		}
 		int result = MetalNativeBridge.INSTANCE.metallum_clear_color_depth_textures_region(
 				this.device.commandQueue(),
 				color.nativeHandle(),
@@ -366,16 +369,33 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		this.flushPendingClear(castTexture(textureView.texture()));
 	}
 
+	boolean deferRenderPassClear(
+		final GpuTextureView colorTexture,
+		final OptionalInt clearColor,
+		@Nullable final GpuTextureView depthTexture,
+		final OptionalDouble clearDepth
+	) {
+		if (clearColor.isPresent() && !isFullTextureView(colorTexture)) {
+			return false;
+		}
+		if (clearDepth.isPresent() && (depthTexture == null || !isFullTextureView(depthTexture))) {
+			return false;
+		}
+		clearColor.ifPresent(color -> this.deferColorClear(castTexture(colorTexture.texture()), color));
+		if (clearDepth.isPresent()) {
+			this.deferDepthClear(castTexture(depthTexture.texture()), clearDepth.getAsDouble());
+		}
+		return true;
+	}
+
 	private void deferColorClear(final MetalGpuTexture texture, final int clearColor) {
 		PendingTextureClear state = this.pendingTextureClears.computeIfAbsent(texture, ignored -> new PendingTextureClear());
-		state.colorPending = true;
-		state.clearColor = clearColor;
+		state.color = OptionalInt.of(clearColor);
 	}
 
 	private void deferDepthClear(final MetalGpuTexture texture, final double clearDepth) {
 		PendingTextureClear state = this.pendingTextureClears.computeIfAbsent(texture, ignored -> new PendingTextureClear());
-		state.depthPending = true;
-		state.clearDepth = clearDepth;
+		state.depth = OptionalDouble.of(clearDepth);
 	}
 
 	private void flushPendingClear(final MetalGpuTexture texture) {
@@ -383,12 +403,12 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		if (pending == null) {
 			return;
 		}
-		if (pending.colorPending) {
+		if (pending.color.isPresent()) {
 			int result = MetalNativeBridge.INSTANCE.metallum_clear_texture(
 				this.device.commandQueue(),
 				texture.nativeHandle(),
 				1,
-				pending.clearColor,
+				pending.color.getAsInt(),
 				0,
 				1.0
 			);
@@ -396,14 +416,14 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 				LOGGER.warn("Failed to flush deferred Metal color clear '{}'", texture.getLabel());
 			}
 		}
-		if (pending.depthPending) {
+		if (pending.depth.isPresent()) {
 			int result = MetalNativeBridge.INSTANCE.metallum_clear_texture(
 				this.device.commandQueue(),
 				texture.nativeHandle(),
 				0,
 				0,
 				1,
-				pending.clearDepth
+				pending.depth.getAsDouble()
 			);
 			if (result != 0) {
 				LOGGER.warn("Failed to flush deferred Metal depth clear '{}'", texture.getLabel());
@@ -411,58 +431,46 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		}
 	}
 
-	private ResolvedColorClear resolveColorAttachmentClear(
+	private OptionalInt resolveColorAttachmentClear(
 		final GpuTextureView textureView,
-		final OptionalInt explicitClear,
-		final RenderPass.RenderArea renderArea
+		final OptionalInt explicitClear
 	) {
 		MetalGpuTexture texture = castTexture(textureView.texture());
 		PendingTextureClear pending = this.pendingTextureClears.get(texture);
-		if (pending == null || !pending.colorPending) {
-			return explicitClear.isPresent() ? new ResolvedColorClear(true, explicitClear.getAsInt()) : ResolvedColorClear.disabled();
+		if (pending == null || pending.color.isEmpty()) {
+			return explicitClear;
 		}
 		if (!isFullTextureView(textureView)) {
 			this.flushPendingClear(texture);
-			return explicitClear.isPresent() ? new ResolvedColorClear(true, explicitClear.getAsInt()) : ResolvedColorClear.disabled();
+			return explicitClear;
 		}
-		if (explicitClear.isPresent()) {
-			pending.colorPending = false;
-			this.removePendingIfEmpty(texture, pending);
-			return new ResolvedColorClear(true, explicitClear.getAsInt());
-		}
-		pending.colorPending = false;
-		int clearColor = pending.clearColor;
+		OptionalInt clear = explicitClear.isPresent() ? explicitClear : pending.color;
+		pending.color = OptionalInt.empty();
 		this.removePendingIfEmpty(texture, pending);
-		return new ResolvedColorClear(true, clearColor);
+		return clear;
 	}
 
-	private ResolvedDepthClear resolveDepthAttachmentClear(
+	private OptionalDouble resolveDepthAttachmentClear(
 		final GpuTextureView textureView,
-		final OptionalDouble explicitClear,
-		final RenderPass.RenderArea renderArea
+		final OptionalDouble explicitClear
 	) {
 		MetalGpuTexture texture = castTexture(textureView.texture());
 		PendingTextureClear pending = this.pendingTextureClears.get(texture);
-		if (pending == null || !pending.depthPending) {
-			return explicitClear.isPresent() ? new ResolvedDepthClear(true, explicitClear.getAsDouble()) : ResolvedDepthClear.disabled();
+		if (pending == null || pending.depth.isEmpty()) {
+			return explicitClear;
 		}
 		if (!isFullTextureView(textureView)) {
 			this.flushPendingClear(texture);
-			return explicitClear.isPresent() ? new ResolvedDepthClear(true, explicitClear.getAsDouble()) : ResolvedDepthClear.disabled();
+			return explicitClear;
 		}
-		if (explicitClear.isPresent()) {
-			pending.depthPending = false;
-			this.removePendingIfEmpty(texture, pending);
-			return new ResolvedDepthClear(true, explicitClear.getAsDouble());
-		}
-		pending.depthPending = false;
-		double clearDepth = pending.clearDepth;
+		OptionalDouble clear = explicitClear.isPresent() ? explicitClear : pending.depth;
+		pending.depth = OptionalDouble.empty();
 		this.removePendingIfEmpty(texture, pending);
-		return new ResolvedDepthClear(true, clearDepth);
+		return clear;
 	}
 
 	private void removePendingIfEmpty(final MetalGpuTexture texture, final PendingTextureClear pending) {
-		if (!pending.colorPending && !pending.depthPending) {
+		if (pending.color.isEmpty() && pending.depth.isEmpty()) {
 			this.pendingTextureClears.remove(texture);
 		}
 	}
@@ -473,23 +481,25 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 			&& textureView.texture().getDepthOrLayers() == 1;
 	}
 
+	private static boolean isFullTextureRegion(
+		final MetalGpuTexture color,
+		final MetalGpuTexture depth,
+		final int x,
+		final int y,
+		final int width,
+		final int height
+	) {
+		return x == 0
+			&& y == 0
+			&& width == color.getWidth(0)
+			&& height == color.getHeight(0)
+			&& width == depth.getWidth(0)
+			&& height == depth.getHeight(0);
+	}
+
 	private static final class PendingTextureClear {
-		boolean colorPending;
-		int clearColor;
-		boolean depthPending;
-		double clearDepth;
-	}
-
-	private record ResolvedColorClear(boolean enabled, int clearColor) {
-		static ResolvedColorClear disabled() {
-			return new ResolvedColorClear(false, 0);
-		}
-	}
-
-	private record ResolvedDepthClear(boolean enabled, double clearDepth) {
-		static ResolvedDepthClear disabled() {
-			return new ResolvedDepthClear(false, 1.0);
-		}
+		OptionalInt color = OptionalInt.empty();
+		OptionalDouble depth = OptionalDouble.empty();
 	}
 
 	private void writeToTextureFromRows(

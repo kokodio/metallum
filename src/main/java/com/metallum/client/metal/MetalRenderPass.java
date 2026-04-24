@@ -16,6 +16,8 @@ import com.sun.jna.Pointer;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.OptionalDouble;
+import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Supplier;
 import net.fabricmc.api.EnvType;
@@ -37,10 +39,8 @@ final class MetalRenderPass implements RenderPassBackend {
 	@Nullable
 	private final GpuTextureView depthTexture;
 	private final RenderPass.RenderArea renderArea;
-	private final boolean clearColorEnabled;
-	private final int clearColor;
-	private final boolean clearDepthEnabled;
-	private final double clearDepth;
+	private final OptionalInt clearColor;
+	private final OptionalDouble clearDepth;
 	private final ScissorState scissorState = new ScissorState();
 	private final GpuBuffer[] vertexBuffers = new GpuBuffer[MAX_VERTEX_BUFFERS];
 	private final HashMap<String, GpuBufferSlice> uniforms = new HashMap<>();
@@ -60,7 +60,6 @@ final class MetalRenderPass implements RenderPassBackend {
 	private boolean pipelineDirty = true;
 	private boolean depthStateDirty = true;
 	private boolean vertexBuffersDirty = true;
-	private boolean indexBufferDirty = true;
 	private boolean scissorDirty = true;
 
 	MetalRenderPass(
@@ -70,10 +69,8 @@ final class MetalRenderPass implements RenderPassBackend {
 		final GpuTextureView colorTexture,
 		@Nullable final GpuTextureView depthTexture,
 		final RenderPass.RenderArea renderArea,
-		final boolean clearColorEnabled,
-		final int clearColor,
-		final boolean clearDepthEnabled,
-		final double clearDepth
+		final OptionalInt clearColor,
+		final OptionalDouble clearDepth
 	) {
 		this.device = device;
 		this.encoder = encoder;
@@ -81,9 +78,7 @@ final class MetalRenderPass implements RenderPassBackend {
 		this.colorTexture = colorTexture;
 		this.depthTexture = depthTexture;
 		this.renderArea = renderArea;
-		this.clearColorEnabled = clearColorEnabled;
 		this.clearColor = clearColor;
-		this.clearDepthEnabled = clearDepthEnabled;
 		this.clearDepth = clearDepth;
 	}
 
@@ -102,7 +97,6 @@ final class MetalRenderPass implements RenderPassBackend {
 			this.pipelineDirty = true;
 			this.depthStateDirty = true;
 			this.vertexBuffersDirty = true;
-			this.indexBufferDirty = true;
 		}
 
 		MetalCompiledRenderPipeline compiled = this.device.getOrCompilePipeline(pipeline);
@@ -181,7 +175,6 @@ final class MetalRenderPass implements RenderPassBackend {
 		if (this.indexBuffer != indexBuffer || this.indexType != indexType) {
 			this.indexBuffer = indexBuffer;
 			this.indexType = indexType;
-			this.indexBufferDirty = true;
 		}
 	}
 
@@ -195,8 +188,8 @@ final class MetalRenderPass implements RenderPassBackend {
 			throw new IllegalStateException("Native render pass is unavailable");
 		}
 
-		this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer, nativeIndexBuffer, this.indexType, true);
-		this.drawIndexedNative(renderPass, firstIndex, indexCount, baseVertex, instanceCount, this.indexType);
+		this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer);
+		this.drawIndexedNative(renderPass, nativeIndexBuffer, firstIndex, indexCount, baseVertex, instanceCount, this.indexType);
 	}
 
 	@Override
@@ -225,12 +218,11 @@ final class MetalRenderPass implements RenderPassBackend {
 				draw.uniformUploaderConsumer().accept(uniformArgument, this::setUniform);
 			}
 
-			if (this.needsDrawStateBinding(true)) {
+			if (this.needsDrawStateBinding()) {
 				MetalGpuBuffer nativeVertexBuffer = this.resolveVertexBuffer();
-				MetalGpuBuffer nativeIndexBuffer = this.resolveIndexBuffer();
-				this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer, nativeIndexBuffer, drawIndexType, true);
+				this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer);
 			}
-			this.drawIndexedNative(renderPass, draw.firstIndex(), draw.indexCount(), draw.baseVertex(), 1, drawIndexType);
+			this.drawIndexedNative(renderPass, this.resolveIndexBuffer(), draw.firstIndex(), draw.indexCount(), draw.baseVertex(), 1, drawIndexType);
 		}
 	}
 
@@ -248,7 +240,7 @@ final class MetalRenderPass implements RenderPassBackend {
 			throw new IllegalStateException("Native render pass is unavailable");
 		}
 
-		this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer, null, null, false);
+		this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer);
 
 		int result = primitiveType == MetalPipelineSupport.TRIANGLE_FAN_PRIMITIVE
 			? MetalNativeBridge.INSTANCE.metallum_render_pass_draw_triangle_fan(renderPass, firstVertex, vertexCount, 1)
@@ -312,10 +304,10 @@ final class MetalRenderPass implements RenderPassBackend {
 			depthTextureView == null ? null : depthTextureView.nativeHandle(),
 			this.colorTexture.getWidth(0),
 			this.colorTexture.getHeight(0),
-			this.clearColorEnabled ? 1 : 0,
-			this.clearColor,
-			this.clearDepthEnabled ? 1 : 0,
-			this.clearDepth,
+			this.clearColor.isPresent() ? 1 : 0,
+			this.clearColor.orElse(0),
+			this.clearDepth.isPresent() ? 1 : 0,
+			this.clearDepth.orElse(1.0),
 			this.label
 		);
 		if (MetalProbe.isNullPointer(handle)) {
@@ -328,6 +320,12 @@ final class MetalRenderPass implements RenderPassBackend {
 	}
 
 	void end() {
+		if (MetalProbe.isNullPointer(this.nativeRenderPass) && (this.clearColor.isPresent() || this.clearDepth.isPresent())) {
+			if (this.encoder.deferRenderPassClear(this.colorTexture, this.clearColor, this.depthTexture, this.clearDepth)) {
+				return;
+			}
+			this.getOrCreateNativeRenderPass();
+		}
 		if (MetalProbe.isNullPointer(this.nativeRenderPass)) {
 			return;
 		}
@@ -378,6 +376,7 @@ final class MetalRenderPass implements RenderPassBackend {
 
 	private void drawIndexedNative(
 		final Pointer renderPass,
+		final MetalGpuBuffer nativeIndexBuffer,
 		final int firstIndex,
 		final int indexCount,
 		final int baseVertex,
@@ -391,31 +390,28 @@ final class MetalRenderPass implements RenderPassBackend {
 
 		int safeInstanceCount = Math.max(1, instanceCount);
 		long indexOffsetBytes = (long)firstIndex * (indexType == VertexFormat.IndexType.INT ? 4L : 2L);
+		long nativeIndexType = indexType == VertexFormat.IndexType.INT ? 1L : 0L;
 		int result = primitiveType == MetalPipelineSupport.TRIANGLE_FAN_PRIMITIVE
-			? MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed_triangle_fan(renderPass, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount)
-			: MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed(renderPass, primitiveType, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount);
+			? MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed_triangle_fan(renderPass, nativeIndexBuffer.nativeHandle(), nativeIndexType, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount)
+			: MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed(renderPass, nativeIndexBuffer.nativeHandle(), nativeIndexType, primitiveType, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount);
 		if (result != 0) {
 			throw new IllegalStateException("Native draw failed with code " + result);
 		}
 	}
 
-	private boolean needsDrawStateBinding(final boolean indexed) {
+	private boolean needsDrawStateBinding() {
 		return this.pipelineDirty
 			|| this.depthStateDirty
 			|| this.vertexBuffersDirty
 			|| this.scissorDirty
 			|| !this.dirtyBindings.isEmpty()
-			|| MetalProbe.isNullPointer(this.nativePipeline)
-			|| indexed && this.indexBufferDirty;
+			|| MetalProbe.isNullPointer(this.nativePipeline);
 	}
 
 	private void bindDrawState(
 		final Pointer renderPass,
 		final MetalGpuTexture colorAttachment,
-		@Nullable final MetalGpuBuffer nativeVertexBuffer,
-		@Nullable final MetalGpuBuffer nativeIndexBuffer,
-		final VertexFormat.IndexType indexType,
-		final boolean indexed
+		@Nullable final MetalGpuBuffer nativeVertexBuffer
 	) {
 		if (this.compiledPipeline == null) {
 			throw new IllegalStateException("Pipeline is missing");
@@ -499,18 +495,6 @@ final class MetalRenderPass implements RenderPassBackend {
 				throw new IllegalStateException("Failed to set native vertex buffer, code " + result);
 			}
 			this.vertexBuffersDirty = false;
-		}
-
-		if (indexed && (reboundPipeline || this.indexBufferDirty)) {
-			int result = MetalNativeBridge.INSTANCE.metallum_render_pass_set_index_buffer(
-				renderPass,
-				nativeIndexBuffer == null ? null : nativeIndexBuffer.nativeHandle(),
-				indexType == VertexFormat.IndexType.INT ? 1L : 0L
-			);
-			if (result != 0) {
-				throw new IllegalStateException("Failed to set native index buffer, code " + result);
-			}
-			this.indexBufferDirty = false;
 		}
 
 		this.pushDescriptors(renderPass, colorAttachment, reboundPipeline);

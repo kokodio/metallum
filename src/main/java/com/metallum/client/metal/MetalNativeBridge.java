@@ -47,7 +47,6 @@ final class MetalNativeBridge {
 	private final MethodHandle renderPassSetDepthStencilState;
 	private final MethodHandle renderPassSetRasterState;
 	private final MethodHandle renderPassSetVertexBuffer;
-	private final MethodHandle renderPassSetIndexBuffer;
 	private final MethodHandle renderPassSetBufferBinding;
 	private final MethodHandle renderPassSetTextureBinding;
 	private final MethodHandle renderPassSetScissor;
@@ -146,12 +145,11 @@ final class MetalNativeBridge {
 		);
 		this.renderPassSetRasterState = downcall(lookup, "metallum_render_pass_set_raster_state", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, INT, INT, INT));
 		this.renderPassSetVertexBuffer = downcall(lookup, "metallum_render_pass_set_vertex_buffer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG));
-		this.renderPassSetIndexBuffer = downcall(lookup, "metallum_render_pass_set_index_buffer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG));
 		this.renderPassSetBufferBinding = downcall(lookup, "metallum_render_pass_set_buffer_binding", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG, INT));
 		this.renderPassSetTextureBinding = downcall(lookup, "metallum_render_pass_set_texture_binding", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT));
 		this.renderPassSetScissor = downcall(lookup, "metallum_render_pass_set_scissor", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, INT, INT, INT, INT, INT));
-		this.renderPassDrawIndexed = downcall(lookup, "metallum_render_pass_draw_indexed", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG, LONG));
-		this.renderPassDrawIndexedTriangleFan = downcall(lookup, "metallum_render_pass_draw_indexed_triangle_fan", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG));
+		this.renderPassDrawIndexed = downcall(lookup, "metallum_render_pass_draw_indexed", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG, LONG, LONG));
+		this.renderPassDrawIndexedTriangleFan = downcall(lookup, "metallum_render_pass_draw_indexed_triangle_fan", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG, LONG));
 		this.renderPassDraw = downcall(lookup, "metallum_render_pass_draw", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, LONG, LONG, LONG));
 		this.renderPassDrawTriangleFan = downcall(lookup, "metallum_render_pass_draw_triangle_fan", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, LONG, LONG));
 		this.endRenderPass = downcall(lookup, "metallum_end_render_pass", FunctionDescriptor.of(INT, ValueLayout.ADDRESS));
@@ -569,14 +567,6 @@ final class MetalNativeBridge {
 		}
 	}
 
-	int metallum_render_pass_set_index_buffer(final Pointer renderPass, final Pointer buffer, final long indexType) {
-		try {
-			return (int)this.renderPassSetIndexBuffer.invokeExact(toSegment(renderPass), toSegment(buffer), indexType);
-		} catch (Throwable throwable) {
-			throw bridgeFailure("metallum_render_pass_set_index_buffer", throwable);
-		}
-	}
-
 	int metallum_render_pass_set_buffer_binding(final Pointer renderPass, final long binding, final Pointer buffer, final long offset, final int stageMask) {
 		try {
 			return (int)this.renderPassSetBufferBinding.invokeExact(toSegment(renderPass), binding, toSegment(buffer), offset, stageMask);
@@ -629,6 +619,8 @@ final class MetalNativeBridge {
 
 	int metallum_render_pass_draw_indexed(
 		final Pointer renderPass,
+		final Pointer indexBuffer,
+		final long indexType,
 		final long primitiveType,
 		final long indexOffsetBytes,
 		final long indexCount,
@@ -636,7 +628,16 @@ final class MetalNativeBridge {
 		final long instanceCount
 	) {
 		try {
-			return (int)this.renderPassDrawIndexed.invokeExact(renderPassSegment(renderPass), primitiveType, indexOffsetBytes, indexCount, baseVertex, instanceCount);
+			return (int)this.renderPassDrawIndexed.invokeExact(
+				renderPassSegment(renderPass),
+				toSegment(indexBuffer),
+				indexType,
+				primitiveType,
+				indexOffsetBytes,
+				indexCount,
+				baseVertex,
+				instanceCount
+			);
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_render_pass_draw_indexed", throwable);
 		}
@@ -644,13 +645,23 @@ final class MetalNativeBridge {
 
 	int metallum_render_pass_draw_indexed_triangle_fan(
 		final Pointer renderPass,
+		final Pointer indexBuffer,
+		final long indexType,
 		final long indexOffsetBytes,
 		final long indexCount,
 		final long baseVertex,
 		final long instanceCount
 	) {
 		try {
-			return (int)this.renderPassDrawIndexedTriangleFan.invokeExact(renderPassSegment(renderPass), indexOffsetBytes, indexCount, baseVertex, instanceCount);
+			return (int)this.renderPassDrawIndexedTriangleFan.invokeExact(
+				renderPassSegment(renderPass),
+				toSegment(indexBuffer),
+				indexType,
+				indexOffsetBytes,
+				indexCount,
+				baseVertex,
+				instanceCount
+			);
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_render_pass_draw_indexed_triangle_fan", throwable);
 		}
