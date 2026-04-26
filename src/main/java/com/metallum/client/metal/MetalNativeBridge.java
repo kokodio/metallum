@@ -29,6 +29,7 @@ final class MetalNativeBridge {
 
 	private final Arena libraryArena;
 	private final MethodHandle createSystemDefaultDevice;
+	private final MethodHandle setDebugLabelsEnabled;
 	private final MethodHandle createCommandQueue;
 	private final MethodHandle enqueuePresentTextureToLayer;
 	private final MethodHandle createBuffer;
@@ -69,6 +70,7 @@ final class MetalNativeBridge {
 	private MetalNativeBridge(final Arena libraryArena, final SymbolLookup lookup) {
 		this.libraryArena = libraryArena;
 		this.createSystemDefaultDevice = downcall(lookup, "metallum_create_system_default_device", FunctionDescriptor.of(ValueLayout.ADDRESS));
+		this.setDebugLabelsEnabled = downcall(lookup, "metallum_set_debug_labels_enabled", FunctionDescriptor.ofVoid(INT));
 		this.createCommandQueue = downcall(lookup, "metallum_create_command_queue", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.enqueuePresentTextureToLayer = downcall(lookup, "metallum_enqueue_present_texture_to_layer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.createBuffer = downcall(lookup, "metallum_create_buffer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, ValueLayout.ADDRESS));
@@ -205,6 +207,14 @@ final class MetalNativeBridge {
 			return toPointer((MemorySegment)this.createSystemDefaultDevice.invokeExact());
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_create_system_default_device", throwable);
+		}
+	}
+
+	void metallum_set_debug_labels_enabled(final boolean enabled) {
+		try {
+			this.setDebugLabelsEnabled.invokeExact(enabled ? 1 : 0);
+		} catch (Throwable throwable) {
+			throw bridgeFailure("metallum_set_debug_labels_enabled", throwable);
 		}
 	}
 

@@ -56,6 +56,7 @@ final class MetalDevice implements GpuDeviceBackend {
 		this.bootstrap = bootstrap;
 		this.nativeApi = MetalNativeBridge.INSTANCE;
 		this.debugOptions = debugOptions;
+		this.nativeApi.metallum_set_debug_labels_enabled(this.useLabels());
 		this.commandQueue = this.nativeApi.metallum_create_command_queue(bootstrap.device());
 		if (MetalProbe.isNullPointer(this.commandQueue)) {
 			throw new IllegalStateException("Failed to create Metal command queue");
@@ -147,7 +148,7 @@ final class MetalDevice implements GpuDeviceBackend {
 	}
 
 	boolean useLabels() {
-		return true;
+		return this.debugOptions.useLabels();
 	}
 
 	@Override
