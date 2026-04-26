@@ -5,7 +5,12 @@
 	"mixins": [
 	],
 	"client": [
-		"PreferredGraphicsApiMixin"
+		"PreferredGraphicsApiMixin",
+		"SectionCompilerMixin",
+		"SectionRenderDispatcherMixin",
+		"LevelRendererMixin",
+		"accessor.MeshDataAccessor",
+		"accessor.SectionCompilerResultsAccessor"
 	],
 	"injectors": {
 		"defaultRequire": 1

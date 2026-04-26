@@ -43,6 +43,7 @@ final class MetalCrossShaderCompiler {
 	private static final int MSL_VERSION_4_0 = 0x040000;
 	private static final Pattern VERTEX_ENTRY_PATTERN = Pattern.compile("\\bvertex\\s+\\w+\\s+(\\w+)\\s*\\(");
 	private static final Pattern FRAGMENT_ENTRY_PATTERN = Pattern.compile("\\bfragment\\s+\\w+\\s+(\\w+)\\s*\\(");
+	private static final Pattern TERRAIN_UV2_LOCAL_PATTERN = Pattern.compile("\\bint2\\s+(\\w+)\\s*=\\s*in\\.UV2\\s*;");
 	private static final Method ADD_TO_BIND_GROUP_METHOD = lookupAddToBindGroupMethod();
 	private static final Set<String> LOGGED_MISSING_SHADER_SOURCE = ConcurrentHashMap.newKeySet();
 	private static final Set<String> LOGGED_COMPILE_FAILURE = ConcurrentHashMap.newKeySet();
@@ -97,6 +98,7 @@ final class MetalCrossShaderCompiler {
 
 				boolean flipVertexY = shouldFlipVertexY(pipeline);
 				String vertexMsl = spirvToMsl(vertexSpirv.spirv(), flipVertexY);
+				vertexMsl = patchPackedTerrainVertexMsl(pipelineId, vertexMsl);
 				String fragmentMsl = spirvToMsl(fragmentSpirv.spirv());
 				String vertexEntryPoint = extractEntryPoint(vertexMsl, VERTEX_ENTRY_PATTERN, "main0");
 				String fragmentEntryPoint = extractEntryPoint(fragmentMsl, FRAGMENT_ENTRY_PATTERN, "main0");
@@ -202,6 +204,17 @@ final class MetalCrossShaderCompiler {
 	private static String extractEntryPoint(final String msl, final Pattern pattern, final String fallback) {
 		Matcher matcher = pattern.matcher(msl);
 		return matcher.find() ? matcher.group(1) : fallback;
+	}
+
+	private static String patchPackedTerrainVertexMsl(final String pipelineId, final String vertexMsl) {
+		if (!MetalTerrainVertexPacking.isPackedTerrainPipeline(pipelineId)) {
+			return vertexMsl;
+		}
+
+		String patched = vertexMsl
+			.replace("int2 UV2 [[attribute(3)]];", "uint2 UV2 [[attribute(3)]];")
+			.replace("thread const int2& uv", "thread const uint2& uv");
+		return TERRAIN_UV2_LOCAL_PATTERN.matcher(patched).replaceAll("uint2 $1 = in.UV2;");
 	}
 
 	private static List<MetalCompiledRenderPipeline.ResourceBinding> buildResourceBindings(

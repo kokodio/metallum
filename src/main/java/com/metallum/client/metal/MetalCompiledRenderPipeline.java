@@ -82,9 +82,15 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline {
 		this.bufferBindingCount = maxBufferBinding + 1;
 		this.textureBindingCount = maxTextureBinding + 1;
 		if (valid) {
-			this.vertexAttributeFormats = MetalPipelineSupport.vertexAttributeFormats(info.getVertexFormat());
-			this.vertexAttributeOffsets = MetalPipelineSupport.vertexAttributeOffsets(info.getVertexFormat());
-			this.vertexStride = info.getVertexFormat().getVertexSize();
+			if (MetalTerrainVertexPacking.isPackedTerrainPipeline(info.getLocation().toString())) {
+				this.vertexAttributeFormats = MetalTerrainVertexPacking.packedAttributeFormats();
+				this.vertexAttributeOffsets = MetalTerrainVertexPacking.packedAttributeOffsets();
+				this.vertexStride = MetalTerrainVertexPacking.PACKED_TERRAIN_VERTEX_SIZE;
+			} else {
+				this.vertexAttributeFormats = MetalPipelineSupport.vertexAttributeFormats(info.getVertexFormat());
+				this.vertexAttributeOffsets = MetalPipelineSupport.vertexAttributeOffsets(info.getVertexFormat());
+				this.vertexStride = info.getVertexFormat().getVertexSize();
+			}
 			var depthStencilState = info.getDepthStencilState();
 			if (depthStencilState == null) {
 				this.depthCompareOp = 1L;

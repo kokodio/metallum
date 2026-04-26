@@ -60,6 +60,7 @@ final class MetalDevice implements GpuDeviceBackend {
 		if (MetalProbe.isNullPointer(this.commandQueue)) {
 			throw new IllegalStateException("Failed to create Metal command queue");
 		}
+		MetalTerrainVertexPacking.setEnabled(true);
 		this.commandEncoder = new MetalCommandEncoder(this);
 		this.deviceInfo = buildDeviceInfo(bootstrap);
 	}
@@ -186,6 +187,7 @@ final class MetalDevice implements GpuDeviceBackend {
 		if (!MetalProbe.isNullPointer(this.bootstrap.device())) {
 			this.nativeApi.metallum_release_object(this.bootstrap.device());
 		}
+		MetalTerrainVertexPacking.setEnabled(false);
 	}
 
 	@Override

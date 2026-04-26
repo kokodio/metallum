@@ -249,6 +249,7 @@ private func vertexFormat(from code: UInt64) -> MTLVertexFormat {
     case 35: return .short3Normalized
     case 36: return .half3
     case 37: return .uchar4Normalized_bgra
+    case 38: return .uchar2
     default: return .invalid
     }
 }
