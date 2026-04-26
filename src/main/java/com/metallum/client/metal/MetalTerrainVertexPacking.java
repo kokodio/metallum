@@ -124,7 +124,9 @@ public final class MetalTerrainVertexPacking {
 		}
 
 		MeshData packedMesh = new MeshData(builder.build(), drawState);
-		transferIndexBuffer(mesh, packedMesh);
+		if (!MetalTerrainFaceCulling.tryAttachIndexBuffer(layer, mesh, packedMesh)) {
+			transferIndexBuffer(mesh, packedMesh);
+		}
 		return packedMesh;
 	}
 

@@ -6,7 +6,10 @@
 	],
 	"client": [
 		"PreferredGraphicsApiMixin",
+		"CompiledSectionMeshMixin",
 		"SectionCompilerMixin",
+		"MeshDataMixin",
+		"RenderSectionMixin",
 		"SectionRenderDispatcherMixin",
 		"LevelRendererMixin",
 		"accessor.MeshDataAccessor",
