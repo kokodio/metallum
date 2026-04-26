@@ -75,6 +75,10 @@ final class MetalSurface implements GpuSurfaceBackend {
 
 	@Override
 	public void present() {
+		int result = MetalNativeBridge.INSTANCE.metallum_present_pending_drawable(this.device.commandQueue());
+		if (result != 0) {
+			throw new IllegalStateException("Failed to present pending Metal drawable (code " + result + ")");
+		}
 	}
 
 	@Override

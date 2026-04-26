@@ -149,15 +149,31 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 		if ((long)length > destination.length()) {
 			throw new IllegalArgumentException("Buffer upload size exceeds destination slice length");
 		}
-		int result = MetalNativeBridge.INSTANCE.metallum_upload_buffer_region_async(
-			this.device.commandQueue(),
-			buffer.nativeHandle(),
-			destination.offset(),
-			source,
+
+		MetalGpuBuffer stagingBuffer = new MetalGpuBuffer(
+			this.device,
+			buffer.label() == null ? null : buffer.label() + " upload staging",
+			GpuBuffer.USAGE_MAP_WRITE | GpuBuffer.USAGE_COPY_SRC,
 			length
 		);
-		if (result != 0) {
-			throw new IllegalStateException("Failed to upload Metal buffer '" + buffer.label() + "' (code " + result + ")");
+		try {
+			ByteBuffer staging = stagingBuffer.fullStorageView().order(ByteOrder.nativeOrder());
+			staging.limit(length);
+			staging.put(source);
+
+			int result = MetalNativeBridge.INSTANCE.metallum_copy_buffer_to_buffer(
+				this.device.commandQueue(),
+				stagingBuffer.nativeHandle(),
+				0L,
+				buffer.nativeHandle(),
+				destination.offset(),
+				length
+			);
+			if (result != 0) {
+				throw new IllegalStateException("Failed to upload Metal buffer '" + buffer.label() + "' (code " + result + ")");
+			}
+		} finally {
+			this.queueForDestroy(stagingBuffer::close);
 		}
 	}
 

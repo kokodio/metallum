@@ -32,6 +32,7 @@ final class MetalNativeBridge {
 	private final MethodHandle setDebugLabelsEnabled;
 	private final MethodHandle createCommandQueue;
 	private final MethodHandle enqueuePresentTextureToLayer;
+	private final MethodHandle presentPendingDrawable;
 	private final MethodHandle createBuffer;
 	private final MethodHandle uploadBufferRegionAsync;
 	private final MethodHandle copyBufferToBuffer;
@@ -73,6 +74,7 @@ final class MetalNativeBridge {
 		this.setDebugLabelsEnabled = downcall(lookup, "metallum_set_debug_labels_enabled", FunctionDescriptor.ofVoid(INT));
 		this.createCommandQueue = downcall(lookup, "metallum_create_command_queue", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.enqueuePresentTextureToLayer = downcall(lookup, "metallum_enqueue_present_texture_to_layer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+		this.presentPendingDrawable = downcall(lookup, "metallum_present_pending_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS));
 		this.createBuffer = downcall(lookup, "metallum_create_buffer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, ValueLayout.ADDRESS));
 		this.uploadBufferRegionAsync = downcall(lookup, "metallum_upload_buffer_region_async", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG));
 		this.copyBufferToBuffer = downcall(lookup, "metallum_copy_buffer_to_buffer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG, LONG));
@@ -720,6 +722,14 @@ final class MetalNativeBridge {
 			return (int)this.enqueuePresentTextureToLayer.invokeExact(toSegment(commandQueue), toSegment(layer), toSegment(sourceTexture));
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_enqueue_present_texture_to_layer", throwable);
+		}
+	}
+
+	int metallum_present_pending_drawable(final Pointer commandQueue) {
+		try {
+			return (int)this.presentPendingDrawable.invokeExact(toSegment(commandQueue));
+		} catch (Throwable throwable) {
+			throw bridgeFailure("metallum_present_pending_drawable", throwable);
 		}
 	}
 
