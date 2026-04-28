@@ -31,6 +31,7 @@ final class MetalNativeBridge {
 	private final MethodHandle createSystemDefaultDevice;
 	private final MethodHandle setDebugLabelsEnabled;
 	private final MethodHandle createCommandQueue;
+	private final MethodHandle acquireNextDrawable;
 	private final MethodHandle enqueuePresentTextureToLayer;
 	private final MethodHandle presentPendingDrawable;
 	private final MethodHandle createBuffer;
@@ -73,6 +74,7 @@ final class MetalNativeBridge {
 		this.createSystemDefaultDevice = downcall(lookup, "metallum_create_system_default_device", FunctionDescriptor.of(ValueLayout.ADDRESS));
 		this.setDebugLabelsEnabled = downcall(lookup, "metallum_set_debug_labels_enabled", FunctionDescriptor.ofVoid(INT));
 		this.createCommandQueue = downcall(lookup, "metallum_create_command_queue", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
+		this.acquireNextDrawable = downcall(lookup, "metallum_acquire_next_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.enqueuePresentTextureToLayer = downcall(lookup, "metallum_enqueue_present_texture_to_layer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.presentPendingDrawable = downcall(lookup, "metallum_present_pending_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS));
 		this.createBuffer = downcall(lookup, "metallum_create_buffer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, ValueLayout.ADDRESS));
@@ -714,6 +716,14 @@ final class MetalNativeBridge {
 			return (int)this.configureLayer.invokeExact(toSegment(layer), width, height, immediatePresentMode);
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_configure_layer", throwable);
+		}
+	}
+
+	int metallum_acquire_next_drawable(final Pointer commandQueue, final Pointer layer) {
+		try {
+			return (int)this.acquireNextDrawable.invokeExact(toSegment(commandQueue), toSegment(layer));
+		} catch (Throwable throwable) {
+			throw bridgeFailure("metallum_acquire_next_drawable", throwable);
 		}
 	}
 

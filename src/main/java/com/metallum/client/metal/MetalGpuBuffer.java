@@ -11,7 +11,6 @@ import org.jspecify.annotations.Nullable;
 @Environment(EnvType.CLIENT)
 final class MetalGpuBuffer extends GpuBuffer {
 	private static final long MTL_RESOURCE_STORAGE_MODE_PRIVATE = 2L << 4;
-	private static final long MTL_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED = 1L << 8;
 	private final MetalDevice device;
 	@Nullable
 	private final String label;
@@ -118,7 +117,6 @@ final class MetalGpuBuffer extends GpuBuffer {
 	}
 
 	private static long toMtlResourceOptions(@GpuBuffer.Usage final int usage) {
-		long storageMode = isCpuAccessible(usage) ? 0L : MTL_RESOURCE_STORAGE_MODE_PRIVATE;
-		return storageMode | MTL_RESOURCE_HAZARD_TRACKING_MODE_UNTRACKED;
+		return isCpuAccessible(usage) ? 0L : MTL_RESOURCE_STORAGE_MODE_PRIVATE;
 	}
 }

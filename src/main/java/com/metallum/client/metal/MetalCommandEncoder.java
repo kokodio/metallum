@@ -30,7 +30,7 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 	private final MetalDevice device;
 	private long currentSubmitIndex = 2L;
 	private long completedSubmitIndex = 0L;
-	private final MetalDestructionQueue destroyQueue = new MetalDestructionQueue(MAX_SUBMITS_IN_FLIGHT);
+	private final MetalDestructionQueue destroyQueue = new MetalDestructionQueue(MAX_SUBMITS_IN_FLIGHT + 1);
 	private static final org.slf4j.Logger LOGGER = Metallum.LOGGER;
 	private final Map<MetalGpuTexture, PendingTextureClear> pendingTextureClears = new IdentityHashMap<>();
 	@Nullable
@@ -42,14 +42,15 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
 
 	@Override
 	public void submit() {
+		if (!this.awaitSubmitCompletion(this.currentSubmitIndex - MAX_SUBMITS_IN_FLIGHT, 5000L)) {
+			throw new IllegalStateException("5s timeout reached when waiting for Metal submit completion");
+		}
+
 		int result = MetalNativeBridge.INSTANCE.metallum_signal_submit(this.device.commandQueue(), this.currentSubmitIndex);
 		if (result != 0) {
 			throw new IllegalStateException("Failed to signal Metal submit " + this.currentSubmitIndex + " (code " + result + ")");
 		}
 		this.currentSubmitIndex++;
-		if (!this.awaitSubmitCompletion(this.currentSubmitIndex - MAX_SUBMITS_IN_FLIGHT, 5000L)) {
-			throw new IllegalStateException("5s timeout reached when waiting for Metal submit completion");
-		}
 		this.destroyQueue.rotate();
 	}
 

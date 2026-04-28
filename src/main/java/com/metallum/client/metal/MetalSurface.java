@@ -54,6 +54,10 @@ final class MetalSurface implements GpuSurfaceBackend {
 		if (this.configuration == null) {
 			throw new SurfaceException("Metal surface must be configured before acquire");
 		}
+		int result = MetalNativeBridge.INSTANCE.metallum_acquire_next_drawable(this.device.commandQueue(), this.bootstrap.metalLayer());
+		if (result != 0) {
+			throw new SurfaceException("Failed to acquire Metal drawable (code " + result + ")");
+		}
 	}
 
 	@Override
