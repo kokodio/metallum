@@ -225,10 +225,10 @@ final class MetalRenderPass implements RenderPassBackend {
 			MetalGpuBuffer nativeIndexBuffer = this.resolveIndexBuffer();
 			MetalTerrainFaceCulling.VisibleRanges visibleRanges = MetalTerrainFaceCulling.takeVisibleRanges(draw, currentIndexBuffer);
 			if (visibleRanges != null) {
-				MetalTerrainFaceCulling.Range[] ranges = visibleRanges.ranges();
-				for (MetalTerrainFaceCulling.Range range : ranges) {
-					if (range.indexCount() > 0) {
-						this.drawIndexedNative(renderPass, nativeIndexBuffer, draw.firstIndex() + range.firstIndex(), range.indexCount(), draw.baseVertex(), 1, drawIndexType);
+				for (int range = 0; range < visibleRanges.rangeCount(); range++) {
+					int indexCount = visibleRanges.indexCount(range);
+					if (indexCount > 0) {
+						this.drawIndexedNative(renderPass, nativeIndexBuffer, draw.firstIndex() + visibleRanges.firstIndex(range), indexCount, draw.baseVertex(), 1, drawIndexType);
 					}
 				}
 				continue;

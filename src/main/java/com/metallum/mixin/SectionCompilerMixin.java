@@ -31,12 +31,7 @@ public abstract class SectionCompilerMixin {
 
 		Map<ChunkSectionLayer, MeshData> renderedLayers = ((SectionCompilerResultsAccessor)(Object)cir.getReturnValue()).metallum$getRenderedLayers();
 		for (Map.Entry<ChunkSectionLayer, MeshData> entry : renderedLayers.entrySet()) {
-			MeshData original = entry.getValue();
-			MeshData packed = MetalTerrainVertexPacking.pack(entry.getKey(), original);
-			if (packed != original) {
-				entry.setValue(packed);
-				original.close();
-			}
+			MetalTerrainVertexPacking.optimize(entry.getKey(), entry.getValue(), sectionBufferBuilderPack.buffer(entry.getKey()));
 		}
 	}
 }

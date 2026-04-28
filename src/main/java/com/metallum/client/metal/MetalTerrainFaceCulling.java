@@ -3,15 +3,11 @@ package com.metallum.client.metal;
 import com.metallum.mixin.accessor.MeshDataAccessor;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.systems.RenderPass;
-import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.MeshData;
 import com.mojang.blaze3d.vertex.VertexFormat;
-import java.nio.ByteBuffer;
-import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.WeakHashMap;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
@@ -31,25 +27,15 @@ public final class MetalTerrainFaceCulling {
 	private static final int MIN_CLASSIFIED_RATIO_DENOMINATOR = 4;
 
 	private static final int NEGATIVE_X = 0;
-	private static final int POSITIVE_X = 1;
-	private static final int NEGATIVE_Y = 2;
+	private static final int NEGATIVE_Y = 1;
+	private static final int POSITIVE_X = 2;
 	private static final int POSITIVE_Y = 3;
 	private static final int NEGATIVE_Z = 4;
-	private static final int POSITIVE_Z = 5;
-	private static final int UNKNOWN = 6;
+	private static final int UNKNOWN = 5;
+	private static final int POSITIVE_Z = 6;
 	private static final int BUCKET_COUNT = 7;
-	private static final int[] BUCKET_WRITE_ORDER = {
-		NEGATIVE_X,
-		NEGATIVE_Y,
-		POSITIVE_X,
-		POSITIVE_Y,
-		NEGATIVE_Z,
-		UNKNOWN,
-		POSITIVE_Z
-	};
 
 	private static final Object LOCK = new Object();
-	private static final Map<SectionMesh, BlockPos> SECTION_ORIGINS = new WeakHashMap<>();
 	private static final Map<DrawKey, VisibleRanges> VISIBLE_DRAW_RANGES = new HashMap<>();
 
 	private static volatile boolean enabled;
@@ -63,9 +49,6 @@ public final class MetalTerrainFaceCulling {
 		MetalTerrainFaceCulling.enabled = enabled;
 		if (!MetalTerrainFaceCulling.enabled) {
 			beginPrepare();
-			synchronized (LOCK) {
-				SECTION_ORIGINS.clear();
-			}
 		}
 	}
 
@@ -73,27 +56,77 @@ public final class MetalTerrainFaceCulling {
 		return enabled;
 	}
 
-	public static boolean tryAttachIndexBuffer(final ChunkSectionLayer layer, final MeshData sourceMesh, final MeshData packedMesh) {
-		if (!enabled || layer != ChunkSectionLayer.SOLID || sourceMesh == null || packedMesh == null) {
-			return false;
+	static void attachSegments(final MeshData mesh, final FaceSegments segments) {
+		((MeshDataSegments)(Object)mesh).metallum$setTerrainFaceSegments(segments);
+	}
+
+	@Nullable
+	static CullableFaceLayout buildCullableFaceLayout(final ChunkSectionLayer layer, final MeshData sourceMesh, final long sourceBase) {
+		if (!enabled || layer != ChunkSectionLayer.SOLID || sourceMesh == null) {
+			return null;
 		}
 
 		MeshData.DrawState drawState = sourceMesh.drawState();
 		if (drawState.format() != DefaultVertexFormat.BLOCK || drawState.mode() != VertexFormat.Mode.QUADS) {
-			return false;
+			return null;
 		}
 		if (((MeshDataAccessor)sourceMesh).metallum$getIndexBuffer() != null) {
-			return false;
+			return null;
 		}
 
-		FaceIndexBuild build = buildFaceIndexBuffer(sourceMesh);
-		if (build == null) {
-			return false;
+		int vertexCount = drawState.vertexCount();
+		if (vertexCount < 4 || vertexCount % 4 != 0) {
+			return null;
 		}
 
-		((MeshDataAccessor)packedMesh).metallum$setIndexBuffer(build.indexBuffer());
-		((MeshDataRanges)(Object)packedMesh).metallum$setTerrainFaceRanges(build.ranges());
-		return true;
+		int quadCount = vertexCount / 4;
+		if (drawState.indexCount() != quadCount * 6) {
+			return null;
+		}
+
+		byte[] quadBuckets = new byte[quadCount];
+		int negativeXQuadCount = 0;
+		int negativeYQuadCount = 0;
+		int positiveXQuadCount = 0;
+		int positiveYQuadCount = 0;
+		int negativeZQuadCount = 0;
+		int unknownQuadCount = 0;
+		int positiveZQuadCount = 0;
+		int classifiedQuads = 0;
+		for (int quad = 0; quad < quadCount; quad++) {
+			int bucket = classifyQuad(sourceBase + (long)quad * 4L * MetalTerrainVertexPacking.VANILLA_BLOCK_VERTEX_SIZE);
+			quadBuckets[quad] = (byte)bucket;
+			switch (bucket) {
+				case NEGATIVE_X -> negativeXQuadCount++;
+				case NEGATIVE_Y -> negativeYQuadCount++;
+				case POSITIVE_X -> positiveXQuadCount++;
+				case POSITIVE_Y -> positiveYQuadCount++;
+				case NEGATIVE_Z -> negativeZQuadCount++;
+				case UNKNOWN -> unknownQuadCount++;
+				case POSITIVE_Z -> positiveZQuadCount++;
+				default -> {
+				}
+			}
+			if (bucket != UNKNOWN) {
+				classifiedQuads++;
+			}
+		}
+
+		if (classifiedQuads == 0 || classifiedQuads * MIN_CLASSIFIED_RATIO_DENOMINATOR < quadCount * MIN_CLASSIFIED_RATIO_NUMERATOR) {
+			return null;
+		}
+
+		FaceSegments segments = new FaceSegments(
+			negativeXQuadCount * 6,
+			negativeYQuadCount * 6,
+			positiveXQuadCount * 6,
+			positiveYQuadCount * 6,
+			negativeZQuadCount * 6,
+			unknownQuadCount * 6,
+			positiveZQuadCount * 6,
+			quadCount * 6
+		);
+		return new CullableFaceLayout(quadBuckets, segments);
 	}
 
 	public static void beginPrepare() {
@@ -107,13 +140,11 @@ public final class MetalTerrainFaceCulling {
 	}
 
 	public static void rememberSectionOrigin(final SectionMesh sectionMesh, final BlockPos origin) {
-		if (!enabled || !(sectionMesh instanceof SectionMeshRanges)) {
+		if (!enabled || !(sectionMesh instanceof SectionMeshSegments)) {
 			return;
 		}
 
-		synchronized (LOCK) {
-			SECTION_ORIGINS.put(sectionMesh, origin.immutable());
-		}
+		((SectionMeshSegments)sectionMesh).metallum$setTerrainSectionOrigin(origin.immutable());
 	}
 
 	public static void registerVisibleRanges(
@@ -121,30 +152,31 @@ public final class MetalTerrainFaceCulling {
 		final ChunkSectionLayer layer,
 		final SectionRenderDispatcher.RenderSectionBufferSlice slice
 	) {
-		if (!enabled || layer != ChunkSectionLayer.SOLID || slice == null || !(sectionMesh instanceof SectionMeshRanges rangesHolder)) {
+		if (!enabled || layer != ChunkSectionLayer.SOLID || slice == null || !(sectionMesh instanceof SectionMeshSegments segmentsHolder)) {
 			return;
 		}
 
-		FaceRanges ranges = rangesHolder.metallum$getTerrainFaceRanges(layer);
-		if (ranges == null || slice.indexBuffer() == null) {
+		FaceSegments segments = segmentsHolder.metallum$getTerrainFaceSegments();
+		if (segments == null) {
 			return;
 		}
 
 		SectionMesh.SectionDraw draw = sectionMesh.getSectionDraw(layer);
-		if (draw == null || !draw.hasCustomIndexBuffer() || draw.indexType() == null) {
+		if (draw == null || draw.indexType() == null) {
+			return;
+		}
+		boolean customIndexBuffer = draw.hasCustomIndexBuffer();
+		if (customIndexBuffer && slice.indexBuffer() == null) {
 			return;
 		}
 
-		BlockPos origin;
-		synchronized (LOCK) {
-			origin = SECTION_ORIGINS.get(sectionMesh);
-		}
+		BlockPos origin = segmentsHolder.metallum$getTerrainSectionOrigin();
 		Vec3 camera = cameraPosition;
 		if (origin == null || camera == null) {
 			return;
 		}
 
-		VisibleRanges visibleRanges = ranges.visibleFrom(origin, camera);
+		VisibleRanges visibleRanges = segments.visibleFrom(origin, camera);
 		if (visibleRanges == null) {
 			return;
 		}
@@ -154,9 +186,14 @@ public final class MetalTerrainFaceCulling {
 			return;
 		}
 
-		int firstIndex = Math.toIntExact(slice.indexBufferOffset() / draw.indexType().bytes);
+		GpuBuffer indexBuffer = null;
+		int firstIndex = 0;
+		if (customIndexBuffer) {
+			indexBuffer = slice.indexBuffer();
+			firstIndex = Math.toIntExact(slice.indexBufferOffset() / draw.indexType().bytes);
+		}
 		int baseVertex = Math.toIntExact(slice.vertexBufferOffset() / vertexStride);
-		DrawKey key = new DrawKey(slice.vertexBuffer(), slice.indexBuffer(), firstIndex, draw.indexCount(), baseVertex);
+		DrawKey key = new DrawKey(slice.vertexBuffer(), indexBuffer, firstIndex, draw.indexCount(), baseVertex);
 		synchronized (LOCK) {
 			VISIBLE_DRAW_RANGES.put(key, visibleRanges);
 		}
@@ -164,77 +201,17 @@ public final class MetalTerrainFaceCulling {
 
 	@Nullable
 	public static VisibleRanges takeVisibleRanges(final RenderPass.Draw<?> draw, @Nullable final GpuBuffer resolvedIndexBuffer) {
-		if (!enabled || resolvedIndexBuffer == null) {
+		if (!enabled) {
 			return null;
 		}
 
 		DrawKey key = new DrawKey(draw.vertexBuffer(), resolvedIndexBuffer, draw.firstIndex(), draw.indexCount(), draw.baseVertex());
 		synchronized (LOCK) {
-			return VISIBLE_DRAW_RANGES.remove(key);
-		}
-	}
-
-	@Nullable
-	private static FaceIndexBuild buildFaceIndexBuffer(final MeshData sourceMesh) {
-		MeshData.DrawState drawState = sourceMesh.drawState();
-		int vertexCount = drawState.vertexCount();
-		if (vertexCount < 4 || vertexCount % 4 != 0) {
-			return null;
-		}
-
-		int quadCount = vertexCount / 4;
-		int expectedIndexCount = quadCount * 6;
-		if (drawState.indexCount() != expectedIndexCount) {
-			return null;
-		}
-
-		ByteBuffer source = sourceMesh.vertexBuffer().duplicate();
-		if (!source.isDirect() || source.remaining() < (long)vertexCount * MetalTerrainVertexPacking.VANILLA_BLOCK_VERTEX_SIZE) {
-			return null;
-		}
-
-		long sourceBase = MemoryUtil.memAddress(source);
-		byte[] quadBuckets = new byte[quadCount];
-		int[] quadCounts = new int[BUCKET_COUNT];
-		int classifiedQuads = 0;
-		for (int quad = 0; quad < quadCount; quad++) {
-			int bucket = classifyQuad(sourceBase + (long)quad * 4L * MetalTerrainVertexPacking.VANILLA_BLOCK_VERTEX_SIZE);
-			quadBuckets[quad] = (byte)bucket;
-			quadCounts[bucket]++;
-			if (bucket != UNKNOWN) {
-				classifiedQuads++;
+			VisibleRanges visibleRanges = VISIBLE_DRAW_RANGES.remove(key);
+			if (visibleRanges == null && draw.indexBuffer() == null) {
+				visibleRanges = VISIBLE_DRAW_RANGES.remove(new DrawKey(draw.vertexBuffer(), null, draw.firstIndex(), draw.indexCount(), draw.baseVertex()));
 			}
-		}
-
-		if (classifiedQuads == 0 || classifiedQuads * MIN_CLASSIFIED_RATIO_DENOMINATOR < quadCount * MIN_CLASSIFIED_RATIO_NUMERATOR) {
-			return null;
-		}
-
-		int[] firstIndices = new int[BUCKET_COUNT];
-		int[] indexCounts = new int[BUCKET_COUNT];
-		int indexCursor = 0;
-		for (int bucket : BUCKET_WRITE_ORDER) {
-			firstIndices[bucket] = indexCursor;
-			indexCounts[bucket] = quadCounts[bucket] * 6;
-			indexCursor += indexCounts[bucket];
-		}
-
-		VertexFormat.IndexType indexType = drawState.indexType();
-		ByteBufferBuilder builder = ByteBufferBuilder.exactlySized(indexCursor * indexType.bytes);
-		try {
-			long indexBase = builder.reserve(indexCursor * indexType.bytes);
-			long writePointer = indexBase;
-			for (int bucket : BUCKET_WRITE_ORDER) {
-				for (int quad = 0; quad < quadCount; quad++) {
-					if ((quadBuckets[quad] & 0xFF) == bucket) {
-						writePointer = writeQuadIndices(writePointer, indexType, quad * 4);
-					}
-				}
-			}
-			return new FaceIndexBuild(builder.build(), new FaceRanges(firstIndices, indexCounts, indexCursor));
-		} catch (Throwable throwable) {
-			builder.close();
-			throw throwable;
+			return visibleRanges;
 		}
 	}
 
@@ -290,26 +267,6 @@ public final class MetalTerrainFaceCulling {
 		return positive ? positiveBucket : negativeBucket;
 	}
 
-	private static long writeQuadIndices(final long pointer, final VertexFormat.IndexType indexType, final int baseVertex) {
-		if (indexType == VertexFormat.IndexType.INT) {
-			MemoryUtil.memPutInt(pointer, baseVertex);
-			MemoryUtil.memPutInt(pointer + 4L, baseVertex + 1);
-			MemoryUtil.memPutInt(pointer + 8L, baseVertex + 2);
-			MemoryUtil.memPutInt(pointer + 12L, baseVertex + 2);
-			MemoryUtil.memPutInt(pointer + 16L, baseVertex + 3);
-			MemoryUtil.memPutInt(pointer + 20L, baseVertex);
-			return pointer + 24L;
-		}
-
-		MemoryUtil.memPutShort(pointer, (short)baseVertex);
-		MemoryUtil.memPutShort(pointer + 2L, (short)(baseVertex + 1));
-		MemoryUtil.memPutShort(pointer + 4L, (short)(baseVertex + 2));
-		MemoryUtil.memPutShort(pointer + 6L, (short)(baseVertex + 2));
-		MemoryUtil.memPutShort(pointer + 8L, (short)(baseVertex + 3));
-		MemoryUtil.memPutShort(pointer + 10L, (short)baseVertex);
-		return pointer + 12L;
-	}
-
 	private static int visibleMask(final BlockPos origin, final Vec3 camera) {
 		int mask = 1 << UNKNOWN;
 		mask |= visibleAxisMask(camera.x, origin.getX(), origin.getX() + SECTION_SIZE, NEGATIVE_X, POSITIVE_X);
@@ -334,62 +291,208 @@ public final class MetalTerrainFaceCulling {
 		return (1 << negativeBucket) | (1 << positiveBucket);
 	}
 
-	public interface MeshDataRanges {
+	public interface MeshDataSegments {
 		@Nullable
-		FaceRanges metallum$getTerrainFaceRanges();
+		FaceSegments metallum$getTerrainFaceSegments();
 
-		void metallum$setTerrainFaceRanges(@Nullable FaceRanges ranges);
+		void metallum$setTerrainFaceSegments(@Nullable FaceSegments segments);
 	}
 
-	public interface SectionMeshRanges {
+	public interface SectionMeshSegments {
 		@Nullable
-		FaceRanges metallum$getTerrainFaceRanges(ChunkSectionLayer layer);
+		FaceSegments metallum$getTerrainFaceSegments();
 
-		void metallum$setTerrainFaceRanges(ChunkSectionLayer layer, FaceRanges ranges);
+		void metallum$setTerrainFaceSegments(FaceSegments segments);
+
+		@Nullable
+		BlockPos metallum$getTerrainSectionOrigin();
+
+		void metallum$setTerrainSectionOrigin(BlockPos origin);
 	}
 
-	public record FaceRanges(int[] firstIndices, int[] indexCounts, int totalIndexCount) {
+	public record FaceSegments(
+		int negativeXIndexCount,
+		int negativeYIndexCount,
+		int positiveXIndexCount,
+		int positiveYIndexCount,
+		int negativeZIndexCount,
+		int unknownIndexCount,
+		int positiveZIndexCount,
+		int totalIndexCount
+	) {
 		@Nullable
 		private VisibleRanges visibleFrom(final BlockPos origin, final Vec3 camera) {
 			int mask = visibleMask(origin, camera);
-			Range[] ranges = new Range[BUCKET_COUNT];
+			long range0 = 0L;
+			long range1 = 0L;
+			long range2 = 0L;
+			long range3 = 0L;
 			int rangeCount = 0;
+			int activeFirstIndex = 0;
+			int activeIndexCount = 0;
+			int indexCursor = 0;
 			int visibleIndexCount = 0;
-			for (int bucket : BUCKET_WRITE_ORDER) {
-				if ((mask & (1 << bucket)) == 0 || this.indexCounts[bucket] == 0) {
-					continue;
-				}
-				int firstIndex = this.firstIndices[bucket];
-				int indexCount = this.indexCounts[bucket];
-				if (rangeCount > 0) {
-					Range previous = ranges[rangeCount - 1];
-					if (previous.firstIndex + previous.indexCount == firstIndex) {
-						ranges[rangeCount - 1] = new Range(previous.firstIndex, previous.indexCount + indexCount);
-						visibleIndexCount += indexCount;
-						continue;
+
+			for (int bucket = 0; bucket < BUCKET_COUNT; bucket++) {
+				int indexCount = this.indexCount(bucket);
+				boolean visible = (mask & (1 << bucket)) != 0;
+				if (indexCount > 0 && visible) {
+					if (activeIndexCount == 0) {
+						activeFirstIndex = indexCursor;
 					}
+					activeIndexCount += indexCount;
+					visibleIndexCount += indexCount;
+				} else if (indexCount > 0 && activeIndexCount > 0) {
+					switch (rangeCount++) {
+						case 0 -> range0 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+						case 1 -> range1 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+						case 2 -> range2 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+						case 3 -> range3 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+						default -> throw new IllegalStateException("Too many terrain face ranges");
+					}
+					activeIndexCount = 0;
 				}
-				ranges[rangeCount++] = new Range(firstIndex, indexCount);
-				visibleIndexCount += indexCount;
+
+				indexCursor += indexCount;
+			}
+
+			if (activeIndexCount > 0) {
+				switch (rangeCount++) {
+					case 0 -> range0 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+					case 1 -> range1 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+					case 2 -> range2 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+					case 3 -> range3 = VisibleRanges.pack(activeFirstIndex, activeIndexCount);
+					default -> throw new IllegalStateException("Too many terrain face ranges");
+				}
 			}
 
 			if (visibleIndexCount == this.totalIndexCount) {
 				return null;
 			}
 
-			Range[] compactRanges = new Range[rangeCount];
-			System.arraycopy(ranges, 0, compactRanges, 0, rangeCount);
-			return new VisibleRanges(compactRanges, visibleIndexCount);
+			return new VisibleRanges(rangeCount, range0, range1, range2, range3);
+		}
+
+		private int indexCount(final int bucket) {
+			return switch (bucket) {
+				case NEGATIVE_X -> this.negativeXIndexCount;
+				case NEGATIVE_Y -> this.negativeYIndexCount;
+				case POSITIVE_X -> this.positiveXIndexCount;
+				case POSITIVE_Y -> this.positiveYIndexCount;
+				case NEGATIVE_Z -> this.negativeZIndexCount;
+				case UNKNOWN -> this.unknownIndexCount;
+				case POSITIVE_Z -> this.positiveZIndexCount;
+				default -> 0;
+			};
 		}
 	}
 
-	public record Range(int firstIndex, int indexCount) {
+	public record VisibleRanges(int rangeCount, long range0, long range1, long range2, long range3) {
+		private static long pack(final int firstIndex, final int indexCount) {
+			return ((long)firstIndex << Integer.SIZE) | Integer.toUnsignedLong(indexCount);
+		}
+
+		public int firstIndex(final int range) {
+			return (int)(this.range(range) >> Integer.SIZE);
+		}
+
+		public int indexCount(final int range) {
+			return (int)this.range(range);
+		}
+
+		private long range(final int range) {
+			return switch (range) {
+				case 0 -> this.range0;
+				case 1 -> this.range1;
+				case 2 -> this.range2;
+				case 3 -> this.range3;
+				default -> throw new IndexOutOfBoundsException(range);
+			};
+		}
 	}
 
-	public record VisibleRanges(Range[] ranges, int indexCount) {
-	}
+	static final class CullableFaceLayout {
+		private final byte[] quadBuckets;
+		private final FaceSegments segments;
+		private int negativeXVertexCursor;
+		private int negativeYVertexCursor;
+		private int positiveXVertexCursor;
+		private int positiveYVertexCursor;
+		private int negativeZVertexCursor;
+		private int unknownVertexCursor;
+		private int positiveZVertexCursor;
 
-	private record FaceIndexBuild(ByteBufferBuilder.Result indexBuffer, FaceRanges ranges) {
+		private CullableFaceLayout(final byte[] quadBuckets, final FaceSegments segments) {
+			this.quadBuckets = quadBuckets;
+			this.segments = segments;
+			int vertexCursor = 0;
+			this.negativeXVertexCursor = vertexCursor;
+			vertexCursor += indexCountToVertexCount(segments.negativeXIndexCount());
+			this.negativeYVertexCursor = vertexCursor;
+			vertexCursor += indexCountToVertexCount(segments.negativeYIndexCount());
+			this.positiveXVertexCursor = vertexCursor;
+			vertexCursor += indexCountToVertexCount(segments.positiveXIndexCount());
+			this.positiveYVertexCursor = vertexCursor;
+			vertexCursor += indexCountToVertexCount(segments.positiveYIndexCount());
+			this.negativeZVertexCursor = vertexCursor;
+			vertexCursor += indexCountToVertexCount(segments.negativeZIndexCount());
+			this.unknownVertexCursor = vertexCursor;
+			vertexCursor += indexCountToVertexCount(segments.unknownIndexCount());
+			this.positiveZVertexCursor = vertexCursor;
+		}
+
+		int quadCount() {
+			return this.quadBuckets.length;
+		}
+
+		int takeDestinationVertex(final int quad) {
+			return switch (this.quadBuckets[quad] & 0xFF) {
+				case NEGATIVE_X -> {
+					int vertex = this.negativeXVertexCursor;
+					this.negativeXVertexCursor += 4;
+					yield vertex;
+				}
+				case NEGATIVE_Y -> {
+					int vertex = this.negativeYVertexCursor;
+					this.negativeYVertexCursor += 4;
+					yield vertex;
+				}
+				case POSITIVE_X -> {
+					int vertex = this.positiveXVertexCursor;
+					this.positiveXVertexCursor += 4;
+					yield vertex;
+				}
+				case POSITIVE_Y -> {
+					int vertex = this.positiveYVertexCursor;
+					this.positiveYVertexCursor += 4;
+					yield vertex;
+				}
+				case NEGATIVE_Z -> {
+					int vertex = this.negativeZVertexCursor;
+					this.negativeZVertexCursor += 4;
+					yield vertex;
+				}
+				case UNKNOWN -> {
+					int vertex = this.unknownVertexCursor;
+					this.unknownVertexCursor += 4;
+					yield vertex;
+				}
+				case POSITIVE_Z -> {
+					int vertex = this.positiveZVertexCursor;
+					this.positiveZVertexCursor += 4;
+					yield vertex;
+				}
+				default -> throw new IllegalStateException("Unknown terrain face bucket");
+			};
+		}
+
+		FaceSegments segments() {
+			return this.segments;
+		}
+
+		private static int indexCountToVertexCount(final int indexCount) {
+			return indexCount / 6 * 4;
+		}
 	}
 
 	private static final class DrawKey {

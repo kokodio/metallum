@@ -79,55 +79,66 @@ public final class MetalTerrainVertexPacking {
 		return enabled && format == DefaultVertexFormat.BLOCK ? PACKED_TERRAIN_VERTEX_SIZE : format.getVertexSize();
 	}
 
-	public static MeshData pack(final ChunkSectionLayer layer, final MeshData mesh) {
+	public static boolean optimize(final ChunkSectionLayer layer, final MeshData mesh, final ByteBufferBuilder target) {
 		if (!enabled || mesh == null || !isPackableLayer(layer) || !isBlockQuadMesh(mesh.drawState())) {
-			return mesh;
+			return false;
 		}
 
 		MeshData.DrawState drawState = mesh.drawState();
 		int vertexCount = drawState.vertexCount();
+		int sourceSize = Math.multiplyExact(vertexCount, VANILLA_BLOCK_VERTEX_SIZE);
 		ByteBuffer source = mesh.vertexBuffer().duplicate();
-		if (source.remaining() < vertexCount * VANILLA_BLOCK_VERTEX_SIZE) {
-			return mesh;
+		if (source.remaining() < sourceSize) {
+			return false;
 		}
 
 		if (!source.isDirect()) {
-			return mesh;
+			return false;
 		}
 
-		ByteBufferBuilder builder = ByteBufferBuilder.exactlySized(vertexCount * PACKED_TERRAIN_VERTEX_SIZE);
+		MetalTerrainFaceCulling.CullableFaceLayout faceLayout = MetalTerrainFaceCulling.buildCullableFaceLayout(layer, mesh, MemoryUtil.memAddress(source));
+		long destinationBase = target.reserve(Math.multiplyExact(vertexCount, PACKED_TERRAIN_VERTEX_SIZE));
+		source = mesh.vertexBuffer().duplicate();
 		long sourceBase = MemoryUtil.memAddress(source);
-		long destinationBase = builder.reserve(vertexCount * PACKED_TERRAIN_VERTEX_SIZE);
+		boolean packed = true;
 
-		for (int vertex = 0; vertex < vertexCount; vertex++) {
-			long src = sourceBase + (long)vertex * VANILLA_BLOCK_VERTEX_SIZE;
-			long dst = destinationBase + (long)vertex * PACKED_TERRAIN_VERTEX_SIZE;
-
-			float x = MemoryUtil.memGetFloat(src + SRC_POSITION_X);
-			float y = MemoryUtil.memGetFloat(src + SRC_POSITION_Y);
-			float z = MemoryUtil.memGetFloat(src + SRC_POSITION_Z);
-			float u = MemoryUtil.memGetFloat(src + SRC_UV0_U);
-			float v = MemoryUtil.memGetFloat(src + SRC_UV0_V);
-			if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z) || !isAtlasUv(u) || !isAtlasUv(v)) {
-				builder.close();
-				return mesh;
+		if (faceLayout == null) {
+			for (int vertex = 0; vertex < vertexCount; vertex++) {
+				if (!packVertex(sourceBase, destinationBase, vertex, vertex)) {
+					packed = false;
+					break;
+				}
 			}
-
-			MemoryUtil.memPutShort(dst + DST_POSITION_X, Float.floatToFloat16(x));
-			MemoryUtil.memPutShort(dst + DST_POSITION_Y, Float.floatToFloat16(y));
-			MemoryUtil.memPutShort(dst + DST_POSITION_Z, Float.floatToFloat16(z));
-			MemoryUtil.memCopy(src + SRC_COLOR, dst + DST_COLOR, Integer.BYTES);
-			MemoryUtil.memPutShort(dst + DST_UV0_U, toUnorm16(u));
-			MemoryUtil.memPutShort(dst + DST_UV0_V, toUnorm16(v));
-			MemoryUtil.memPutByte(dst + DST_UV2, toUnsignedByte(MemoryUtil.memGetShort(src + SRC_UV2_BLOCK) & 0xFFFF));
-			MemoryUtil.memPutByte(dst + DST_UV2 + 1, toUnsignedByte(MemoryUtil.memGetShort(src + SRC_UV2_SKY) & 0xFFFF));
+		} else {
+			for (int quad = 0; quad < faceLayout.quadCount(); quad++) {
+				int destinationVertex = faceLayout.takeDestinationVertex(quad);
+				for (int vertexInQuad = 0; vertexInQuad < 4; vertexInQuad++) {
+					if (!packVertex(sourceBase, destinationBase, quad * 4 + vertexInQuad, destinationVertex + vertexInQuad)) {
+						packed = false;
+						break;
+					}
+				}
+				if (!packed) {
+					break;
+				}
+			}
 		}
 
-		MeshData packedMesh = new MeshData(builder.build(), drawState);
-		if (!MetalTerrainFaceCulling.tryAttachIndexBuffer(layer, mesh, packedMesh)) {
-			transferIndexBuffer(mesh, packedMesh);
+		ByteBufferBuilder.Result packedVertexBuffer = target.build();
+		if (!packed || packedVertexBuffer == null) {
+			if (packedVertexBuffer != null) {
+				packedVertexBuffer.close();
+			}
+			return false;
 		}
-		return packedMesh;
+
+		ByteBufferBuilder.Result originalVertexBuffer = mesh.vertexBufferSlice();
+		((MeshDataAccessor)(Object)mesh).metallum$setVertexBuffer(packedVertexBuffer);
+		originalVertexBuffer.close();
+		if (faceLayout != null) {
+			MetalTerrainFaceCulling.attachSegments(mesh, faceLayout.segments());
+		}
+		return true;
 	}
 
 	private static boolean isTerrainPipeline(final String pipelineLocation) {
@@ -147,15 +158,28 @@ public final class MetalTerrainVertexPacking {
 		return drawState.format() == DefaultVertexFormat.BLOCK && drawState.mode() == VertexFormat.Mode.QUADS;
 	}
 
-	private static void transferIndexBuffer(final MeshData source, final MeshData destination) {
-		MeshDataAccessor sourceAccessor = (MeshDataAccessor)source;
-		ByteBufferBuilder.Result indexBuffer = sourceAccessor.metallum$getIndexBuffer();
-		if (indexBuffer == null) {
-			return;
+	private static boolean packVertex(final long sourceBase, final long destinationBase, final int sourceVertex, final int destinationVertex) {
+		long src = sourceBase + (long)sourceVertex * VANILLA_BLOCK_VERTEX_SIZE;
+		long dst = destinationBase + (long)destinationVertex * PACKED_TERRAIN_VERTEX_SIZE;
+
+		float x = MemoryUtil.memGetFloat(src + SRC_POSITION_X);
+		float y = MemoryUtil.memGetFloat(src + SRC_POSITION_Y);
+		float z = MemoryUtil.memGetFloat(src + SRC_POSITION_Z);
+		float u = MemoryUtil.memGetFloat(src + SRC_UV0_U);
+		float v = MemoryUtil.memGetFloat(src + SRC_UV0_V);
+		if (!Float.isFinite(x) || !Float.isFinite(y) || !Float.isFinite(z) || !isAtlasUv(u) || !isAtlasUv(v)) {
+			return false;
 		}
 
-		sourceAccessor.metallum$setIndexBuffer(null);
-		((MeshDataAccessor)destination).metallum$setIndexBuffer(indexBuffer);
+		MemoryUtil.memPutShort(dst + DST_POSITION_X, Float.floatToFloat16(x));
+		MemoryUtil.memPutShort(dst + DST_POSITION_Y, Float.floatToFloat16(y));
+		MemoryUtil.memPutShort(dst + DST_POSITION_Z, Float.floatToFloat16(z));
+		MemoryUtil.memCopy(src + SRC_COLOR, dst + DST_COLOR, Integer.BYTES);
+		MemoryUtil.memPutShort(dst + DST_UV0_U, toUnorm16(u));
+		MemoryUtil.memPutShort(dst + DST_UV0_V, toUnorm16(v));
+		MemoryUtil.memPutByte(dst + DST_UV2, toUnsignedByte(MemoryUtil.memGetShort(src + SRC_UV2_BLOCK) & 0xFFFF));
+		MemoryUtil.memPutByte(dst + DST_UV2 + 1, toUnsignedByte(MemoryUtil.memGetShort(src + SRC_UV2_SKY) & 0xFFFF));
+		return true;
 	}
 
 	private static boolean isAtlasUv(final float value) {
