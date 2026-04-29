@@ -205,11 +205,6 @@ private func withMetalAutoreleasePool<T>(_ body: () -> T) -> T {
     autoreleasepool(invoking: body)
 }
 
-@inline(__always)
-private func clampToUInt(_ value: Int) -> UInt {
-    UInt(max(value, 0))
-}
-
 private func textureSliceCount(_ texture: MTLTexture) -> Int {
     switch texture.textureType {
     case .type2DArray:
@@ -353,14 +348,6 @@ private func samplerMipFilter(from code: UInt64) -> MTLSamplerMipFilter {
     case 2: return .linear
     default: return .notMipmapped
     }
-}
-
-private func colorFromARGB(_ argb: Int32) -> UInt32 {
-    let red = UInt32((argb >> 16) & 0xFF)
-    let green = UInt32((argb >> 8) & 0xFF)
-    let blue = UInt32(argb & 0xFF)
-    let alpha = UInt32((argb >> 24) & 0xFF)
-    return red | (green << 8) | (blue << 16) | (alpha << 24)
 }
 
 private func clearColorFromARGB(_ argb: Int32) -> MTLClearColor {
@@ -835,18 +822,6 @@ private func ensurePresentNearestSampler(_ device: MTLDevice) -> MTLSamplerState
     return sampler
 }
 
-private func ensureClearPipeline(_ device: MTLDevice, _ colorFormat: MTLPixelFormat) -> MTLRenderPipelineState? {
-    let key = PipelineVariantKey(deviceAddress: objectAddress(device), colorFormat: colorFormat, depthFormat: .invalid)
-    if let cached = NativeState.clearPipelines[key] {
-        return cached
-    }
-    let pipeline = buildClearPipeline(device: device, colorFormat: colorFormat)
-    if let pipeline {
-        NativeState.clearPipelines[key] = pipeline
-    }
-    return pipeline
-}
-
 private func ensurePresentPipeline(_ device: MTLDevice, _ colorFormat: MTLPixelFormat) -> MTLRenderPipelineState? {
     let key = PipelineVariantKey(deviceAddress: objectAddress(device), colorFormat: colorFormat, depthFormat: .invalid)
     if let cached = NativeState.presentPipelines[key] {
@@ -1225,38 +1200,6 @@ public func metallum_create_buffer_texture_view(
         textureView.label = "\(buffer.label ?? "buffer") texel view"
     }
     return retainedPointer(textureView)
-    }
-}
-
-@_cdecl("metallum_upload_buffer_region_async")
-public func metallum_upload_buffer_region_async(
-    _ commandQueuePtr: UnsafeMutableRawPointer?,
-    _ destinationBufferPtr: UnsafeMutableRawPointer?,
-    _ destinationOffset: UInt64,
-    _ bytes: UnsafeRawPointer?,
-    _ length: UInt64
-) -> Int32 {
-    return withMetalAutoreleasePool {
-    guard
-        let queue: MTLCommandQueue = object(commandQueuePtr),
-        let destinationBuffer: MTLBuffer = object(destinationBufferPtr),
-        let bytes,
-        length > 0
-    else {
-        return 1
-    }
-
-    guard let stagingBuffer = queue.device.makeBuffer(bytes: bytes, length: Int(length), options: metallumSharedResourceOptions) else {
-        return 1
-    }
-    guard let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue), let blit = commandBuffer.makeBlitCommandEncoder() else {
-        return 1
-    }
-    setBlitEncoderLabel(blit, "upload buffer -> \(destinationBuffer.label ?? "buffer")")
-    blit.copy(from: stagingBuffer, sourceOffset: 0, to: destinationBuffer, destinationOffset: Int(destinationOffset), size: Int(length))
-    blit.endEncoding()
-    keepObjectAliveUntilCompleted(commandBuffer, stagingBuffer)
-    return 0
     }
 }
 
@@ -2028,70 +1971,7 @@ public func metallum_clear_texture(
     }
 }
 
-@_cdecl("metallum_clear_color_texture_region")
-public func metallum_clear_color_texture_region(
-    _ commandQueuePtr: UnsafeMutableRawPointer?,
-    _ texturePtr: UnsafeMutableRawPointer?,
-    _ clearColor: Int32,
-    _ x: Int32,
-    _ y: Int32,
-    _ width: Int32,
-    _ height: Int32
-) -> Int32 {
-    return withMetalAutoreleasePool {
-    guard
-        let queue: MTLCommandQueue = object(commandQueuePtr),
-        let texture: MTLTexture = object(texturePtr),
-        width > 0,
-        height > 0
-    else {
-        return 1
-    }
-
-    let textureWidth = texture.width
-    let textureHeight = texture.height
-    let clampedX = max(Int(x), 0)
-    let clampedY = max(Int(y), 0)
-    let clampedMaxX = min(Int(x) + Int(width), textureWidth)
-    let clampedMaxY = min(Int(y) + Int(height), textureHeight)
-    if clampedX >= clampedMaxX || clampedY >= clampedMaxY {
-        return 0
-    }
-    let scissorRect = MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY)
-    if clampedX == 0 && clampedY == 0 && clampedMaxX == textureWidth && clampedMaxY == textureHeight {
-        return metallum_clear_texture(commandQueuePtr, texturePtr, 1, clearColor, 0, 1.0)
-    }
-
-    guard
-        let commandBuffer = submissionCommandBufferForStandaloneEncoding(queue),
-        let pipeline = ensureClearPipeline(queue.device, texture.pixelFormat)
-    else {
-        return 1
-    }
-
-    let renderPass = MTLRenderPassDescriptor()
-    renderPass.colorAttachments[0].texture = texture
-    renderPass.colorAttachments[0].loadAction = .load
-    renderPass.colorAttachments[0].storeAction = .store
-    guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else {
-        return 1
-    }
-    setRenderEncoderLabel(encoder, "clear region \(textureLabel(texture))")
-    encodeClearDraw(
-        encoder: encoder,
-        pipeline: pipeline,
-        textureWidth: textureWidth,
-        textureHeight: textureHeight,
-        clearColor: clearColor,
-        scissorRect: scissorRect
-    )
-    encoder.endEncoding()
-    return 0
-    }
-}
-
-@_cdecl("metallum_clear_color_depth_textures")
-public func metallum_clear_color_depth_textures(
+private func clearColorDepthTextures(
     _ commandQueuePtr: UnsafeMutableRawPointer?,
     _ colorTexturePtr: UnsafeMutableRawPointer?,
     _ clearColor: Int32,
@@ -2171,7 +2051,7 @@ public func metallum_clear_color_depth_textures_region(
     }
     let scissorRect = MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY)
     if clampedX == 0 && clampedY == 0 && clampedMaxX == textureWidth && clampedMaxY == textureHeight {
-        return metallum_clear_color_depth_textures(commandQueuePtr, colorTexturePtr, clearColor, depthTexturePtr, clearDepth)
+        return clearColorDepthTextures(commandQueuePtr, colorTexturePtr, clearColor, depthTexturePtr, clearDepth)
     }
 
     guard

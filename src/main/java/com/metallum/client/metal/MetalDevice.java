@@ -273,7 +273,7 @@ final class MetalDevice implements GpuDeviceBackend {
 		DeviceType type = lowPower || unifiedMemory ? DeviceType.INTEGRATED : DeviceType.DISCRETE;
 		Set<String> underlyingExtensions = Set.of("CAMetalLayer", "MTLDevice", "Runtime MSL");
 		String osVersion = System.getProperty("os.version", "").trim();
-		String driverDescription = osVersion.isEmpty() ? "Metal" : "Metal (macOS " + osVersion + ")";
+		String driverDescription = "macOS " + osVersion;
 		return new DeviceInfo(
 			bootstrap.deviceName(),
 			"Apple",

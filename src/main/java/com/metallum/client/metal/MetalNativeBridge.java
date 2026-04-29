@@ -35,7 +35,6 @@ final class MetalNativeBridge {
 	private final MethodHandle enqueuePresentTextureToLayer;
 	private final MethodHandle presentPendingDrawable;
 	private final MethodHandle createBuffer;
-	private final MethodHandle uploadBufferRegionAsync;
 	private final MethodHandle copyBufferToBuffer;
 	private final MethodHandle createTexture2d;
 	private final MethodHandle createTextureView;
@@ -64,8 +63,6 @@ final class MetalNativeBridge {
 	private final MethodHandle releaseObject;
 	private final MethodHandle waitForCommandQueueIdle;
 	private final MethodHandle clearTexture;
-	private final MethodHandle clearColorTextureRegion;
-	private final MethodHandle clearColorDepthTextures;
 	private final MethodHandle clearColorDepthTexturesRegion;
 	private final MethodHandle getBufferContents;
 
@@ -78,7 +75,6 @@ final class MetalNativeBridge {
 		this.enqueuePresentTextureToLayer = downcall(lookup, "metallum_enqueue_present_texture_to_layer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 		this.presentPendingDrawable = downcall(lookup, "metallum_present_pending_drawable", FunctionDescriptor.of(INT, ValueLayout.ADDRESS));
 		this.createBuffer = downcall(lookup, "metallum_create_buffer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, LONG, ValueLayout.ADDRESS));
-		this.uploadBufferRegionAsync = downcall(lookup, "metallum_upload_buffer_region_async", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG));
 		this.copyBufferToBuffer = downcall(lookup, "metallum_copy_buffer_to_buffer", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG, ValueLayout.ADDRESS, LONG, LONG));
 		this.createTexture2d = downcall(
 			lookup,
@@ -165,16 +161,6 @@ final class MetalNativeBridge {
 		this.releaseObject = downcall(lookup, "metallum_release_object", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
 		this.waitForCommandQueueIdle = downcall(lookup, "metallum_wait_for_command_queue_idle", FunctionDescriptor.of(INT, ValueLayout.ADDRESS));
 		this.clearTexture = downcall(lookup, "metallum_clear_texture", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, INT, INT, DOUBLE));
-		this.clearColorTextureRegion = downcall(
-			lookup,
-			"metallum_clear_color_texture_region",
-			FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, INT, INT, INT, INT)
-		);
-		this.clearColorDepthTextures = downcall(
-			lookup,
-			"metallum_clear_color_depth_textures",
-			FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, ValueLayout.ADDRESS, DOUBLE)
-		);
 		this.clearColorDepthTexturesRegion = downcall(
 			lookup,
 			"metallum_clear_color_depth_textures_region",
@@ -235,26 +221,6 @@ final class MetalNativeBridge {
 			return toPointer((MemorySegment)this.createBuffer.invokeExact(toSegment(device), length, options, toCString(arena, label)));
 		} catch (Throwable throwable) {
 			throw bridgeFailure("metallum_create_buffer", throwable);
-		}
-	}
-
-	int metallum_upload_buffer_region_async(
-		final Pointer commandQueue,
-		final Pointer destinationBuffer,
-		final long destinationOffset,
-		final ByteBuffer bytes,
-		final long length
-	) {
-		try (Arena arena = Arena.ofConfined()) {
-			return (int)this.uploadBufferRegionAsync.invokeExact(
-				toSegment(commandQueue),
-				toSegment(destinationBuffer),
-				destinationOffset,
-				toByteSegment(arena, bytes, length),
-				length
-			);
-		} catch (Throwable throwable) {
-			throw bridgeFailure("metallum_upload_buffer_region_async", throwable);
 		}
 	}
 
@@ -797,26 +763,6 @@ final class MetalNativeBridge {
 		}
 	}
 
-	int metallum_clear_color_depth_textures(
-		final Pointer commandQueue,
-		final Pointer colorTexture,
-		final int clearColor,
-		final Pointer depthTexture,
-		final double clearDepth
-	) {
-		try {
-			return (int)this.clearColorDepthTextures.invokeExact(
-				toSegment(commandQueue),
-				toSegment(colorTexture),
-				clearColor,
-				toSegment(depthTexture),
-				clearDepth
-			);
-		} catch (Throwable throwable) {
-			throw bridgeFailure("metallum_clear_color_depth_textures", throwable);
-		}
-	}
-
 	int metallum_clear_color_depth_textures_region(
 		final Pointer commandQueue,
 		final Pointer colorTexture,
@@ -844,31 +790,6 @@ final class MetalNativeBridge {
 			throw bridgeFailure("metallum_clear_color_depth_textures_region", throwable);
 		}
 	}
-
-	int metallum_clear_color_texture_region(
-		final Pointer commandQueue,
-		final Pointer texture,
-		final int clearColor,
-		final int x,
-		final int y,
-		final int width,
-		final int height
-	) {
-		try {
-			return (int)this.clearColorTextureRegion.invokeExact(
-				toSegment(commandQueue),
-				toSegment(texture),
-				clearColor,
-				x,
-				y,
-				width,
-				height
-			);
-		} catch (Throwable throwable) {
-			throw bridgeFailure("metallum_clear_color_texture_region", throwable);
-		}
-	}
-
 
 	Pointer metallum_get_buffer_contents(final Pointer buffer) {
 		try {
@@ -909,29 +830,6 @@ final class MetalNativeBridge {
 		return value == null ? MemorySegment.NULL : arena.allocateFrom(value);
 	}
 
-	private static MemorySegment toByteSegment(final Arena arena, final ByteBuffer buffer, final long length) {
-		if (length == 0L) {
-			return MemorySegment.NULL;
-		}
-		if (length < 0L) {
-			throw new IllegalArgumentException("Length must be non-negative");
-		}
-		if (buffer.remaining() < length) {
-			throw new IllegalArgumentException("ByteBuffer does not contain " + length + " readable bytes");
-		}
-
-		ByteBuffer duplicate = buffer.duplicate();
-		duplicate.limit(duplicate.position() + Math.toIntExact(length));
-		ByteBuffer window = duplicate.slice();
-		if (window.isDirect()) {
-			return MemorySegment.ofBuffer(window);
-		}
-
-		MemorySegment copy = arena.allocate(length);
-		copy.copyFrom(MemorySegment.ofBuffer(window));
-		return copy;
-	}
-
 	private static MemorySegment toLongArray(final Arena arena, final long[] values) {
 		if (values == null || values.length == 0) {
 			return MemorySegment.NULL;
@@ -939,17 +837,6 @@ final class MetalNativeBridge {
 		MemorySegment segment = arena.allocate(LONG, values.length);
 		for (int i = 0; i < values.length; i++) {
 			segment.setAtIndex(LONG, i, values[i]);
-		}
-		return segment;
-	}
-
-	private static MemorySegment toPointerArray(final Arena arena, final Pointer[] values) {
-		if (values == null || values.length == 0) {
-			return MemorySegment.NULL;
-		}
-		MemorySegment segment = arena.allocate(ValueLayout.ADDRESS, values.length);
-		for (int i = 0; i < values.length; i++) {
-			segment.setAtIndex(ValueLayout.ADDRESS, i, toSegment(values[i]));
 		}
 		return segment;
 	}
