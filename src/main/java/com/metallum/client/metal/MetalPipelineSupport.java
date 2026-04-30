@@ -9,6 +9,7 @@ import com.sun.jna.Pointer;
 
 @Environment(EnvType.CLIENT)
 final class MetalPipelineSupport {
+	static final long TRIANGLE_PRIMITIVE = 0L;
 	static final long TRIANGLE_FAN_PRIMITIVE = 5L;
 
 	private MetalPipelineSupport() {
@@ -88,7 +89,7 @@ final class MetalPipelineSupport {
 
 	static long primitiveTypeCode(final VertexFormat.Mode mode) {
 		return switch (mode) {
-			case TRIANGLES, QUADS, LINES -> 0L;
+			case TRIANGLES, QUADS, LINES -> TRIANGLE_PRIMITIVE;
 			case TRIANGLE_STRIP -> 1L;
 			case TRIANGLE_FAN -> TRIANGLE_FAN_PRIMITIVE;
 			case DEBUG_LINES -> 2L;

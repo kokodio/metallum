@@ -254,7 +254,7 @@ final class MetalRenderPass implements RenderPassBackend {
 		this.bindDrawState(renderPass, colorAttachment, nativeVertexBuffer);
 
 		int result = primitiveType == MetalPipelineSupport.TRIANGLE_FAN_PRIMITIVE
-			? MetalNativeBridge.INSTANCE.metallum_render_pass_draw_triangle_fan(renderPass, firstVertex, vertexCount, 1)
+			? this.drawTriangleFanNative(renderPass, firstVertex, vertexCount, 1)
 			: MetalNativeBridge.INSTANCE.metallum_render_pass_draw(renderPass, primitiveType, firstVertex, vertexCount, 1);
 		if (result != 0) {
 			throw new IllegalStateException("Native draw failed with code " + result);
@@ -403,11 +403,73 @@ final class MetalRenderPass implements RenderPassBackend {
 		long indexOffsetBytes = (long)firstIndex * (indexType == VertexFormat.IndexType.INT ? 4L : 2L);
 		long nativeIndexType = indexType == VertexFormat.IndexType.INT ? 1L : 0L;
 		int result = primitiveType == MetalPipelineSupport.TRIANGLE_FAN_PRIMITIVE
-			? MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed_triangle_fan(renderPass, nativeIndexBuffer.nativeHandle(), nativeIndexType, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount)
+			? this.drawIndexedTriangleFanNative(renderPass, nativeIndexBuffer, nativeIndexType, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount)
 			: MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed(renderPass, nativeIndexBuffer.nativeHandle(), nativeIndexType, primitiveType, indexOffsetBytes, indexCount, baseVertex, safeInstanceCount);
 		if (result != 0) {
 			throw new IllegalStateException("Native draw failed with code " + result);
 		}
+	}
+
+	private int drawTriangleFanNative(
+		final Pointer renderPass,
+		final int firstVertex,
+		final int vertexCount,
+		final int instanceCount
+	) {
+		if (vertexCount < 3) {
+			return 0;
+		}
+
+		try (MetalGpuBuffer fanIndexBuffer = this.newTriangleFanBuffer(vertexCount)) {
+			return MetalNativeBridge.INSTANCE.metallum_render_pass_draw_triangle_fan(
+				renderPass,
+				fanIndexBuffer.nativeHandle(),
+				firstVertex,
+				vertexCount,
+				Math.max(1, instanceCount)
+			);
+		}
+	}
+
+	private int drawIndexedTriangleFanNative(
+		final Pointer renderPass,
+		final MetalGpuBuffer nativeIndexBuffer,
+		final long nativeIndexType,
+		final long indexOffsetBytes,
+		final int indexCount,
+		final int baseVertex,
+		final int instanceCount
+	) {
+		if (indexCount < 3) {
+			return 0;
+		}
+
+		try (MetalGpuBuffer fanIndexBuffer = this.newTriangleFanBuffer(indexCount)) {
+			return MetalNativeBridge.INSTANCE.metallum_render_pass_draw_indexed_triangle_fan(
+				renderPass,
+				nativeIndexBuffer.nativeHandle(),
+				fanIndexBuffer.nativeHandle(),
+				nativeIndexType,
+				indexOffsetBytes,
+				indexCount,
+				baseVertex,
+				instanceCount
+			);
+		}
+	}
+
+	private MetalGpuBuffer newTriangleFanBuffer(final int sourceCount) {
+		long byteSize = Math.multiplyExact(Math.multiplyExact((long)sourceCount - 2L, 3L), Integer.BYTES);
+		if (byteSize > Integer.MAX_VALUE) {
+			throw new UnsupportedOperationException("Triangle fan index buffer is too large: " + byteSize + " bytes");
+		}
+
+		return new MetalGpuBuffer(
+			this.device,
+			this.device.useLabels() ? "triangle fan index buffer" : null,
+			GpuBuffer.USAGE_MAP_WRITE | GpuBuffer.USAGE_INDEX,
+			byteSize
+		);
 	}
 
 	private boolean needsDrawStateBinding() {

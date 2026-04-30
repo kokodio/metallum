@@ -978,30 +978,34 @@ private func ensureDynamicPipeline(
     }
 }
 
-private func createSequentialTriangleFanIndexBuffer(session: RenderPassSession, vertexCount: UInt64) -> (MTLBuffer, Int)? {
-    guard vertexCount >= 3 else {
+private func triangleFanOutputIndexCount(sourceCount: UInt64, buffer: MTLBuffer) -> Int? {
+    let triangleCount = sourceCount - 2
+    guard triangleCount <= UInt64.max / 3 else {
+        return nil
+    }
+
+    let indexCount = triangleCount * 3
+    let bufferIndexCapacity = UInt64(buffer.length / MemoryLayout<UInt32>.stride)
+    guard indexCount <= UInt64(Int.max), indexCount <= bufferIndexCapacity else {
+        return nil
+    }
+    return Int(indexCount)
+}
+
+private func writeSequentialTriangleFanIndices(_ indexBuffer: MTLBuffer, vertexCount: UInt64) -> Int? {
+    guard vertexCount >= 3, vertexCount - 1 <= UInt64(UInt32.max), let generatedIndexCount = triangleFanOutputIndexCount(sourceCount: vertexCount, buffer: indexBuffer) else {
         return nil
     }
     let triangleCount = vertexCount - 2
-    let generatedIndexCount = triangleCount * 3
-    if triangleCount > UInt64.max / 3 || generatedIndexCount > UInt64(Int.max / MemoryLayout<UInt32>.stride) {
-        return nil
-    }
-
-    var indices = [UInt32]()
-    indices.reserveCapacity(Int(generatedIndexCount))
+    let indices = indexBuffer.contents().assumingMemoryBound(to: UInt32.self)
+    var writeIndex = 0
     for triangle in 0..<triangleCount {
-        indices.append(0)
-        indices.append(UInt32(triangle + 1))
-        indices.append(UInt32(triangle + 2))
+        indices[writeIndex] = 0
+        indices[writeIndex + 1] = UInt32(triangle + 1)
+        indices[writeIndex + 2] = UInt32(triangle + 2)
+        writeIndex += 3
     }
-
-    return indices.withUnsafeBytes { bytes in
-        guard let buffer = session.device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: metallumSharedResourceOptions) else {
-            return nil
-        }
-        return (buffer, Int(generatedIndexCount))
-    }
+    return generatedIndexCount
 }
 
 private func readIndex(_ indexBuffer: MTLBuffer, byteOffset: UInt64, index: UInt64, indexType: UInt64) -> UInt32 {
@@ -1012,37 +1016,27 @@ private func readIndex(_ indexBuffer: MTLBuffer, byteOffset: UInt64, index: UInt
     return base.assumingMemoryBound(to: UInt32.self)[Int(index)]
 }
 
-private func createIndexedTriangleFanIndexBuffer(
-    session: RenderPassSession,
+private func writeIndexedTriangleFanIndices(
     sourceIndexBuffer: MTLBuffer,
+    destinationIndexBuffer: MTLBuffer,
     indexType: UInt64,
     indexOffsetBytes: UInt64,
     indexCount: UInt64
-) -> (MTLBuffer, Int)? {
-    guard indexCount >= 3 else {
+) -> Int? {
+    guard indexCount >= 3, let generatedIndexCount = triangleFanOutputIndexCount(sourceCount: indexCount, buffer: destinationIndexBuffer) else {
         return nil
     }
     let triangleCount = indexCount - 2
-    let generatedCount = triangleCount * 3
-    if triangleCount > UInt64.max / 3 || generatedCount > UInt64(Int.max / MemoryLayout<UInt32>.stride) {
-        return nil
-    }
-
     let center = readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: 0, indexType: indexType)
-    var indices = [UInt32]()
-    indices.reserveCapacity(Int(generatedCount))
+    let indices = destinationIndexBuffer.contents().assumingMemoryBound(to: UInt32.self)
+    var writeIndex = 0
     for triangle in 0..<triangleCount {
-        indices.append(center)
-        indices.append(readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 1, indexType: indexType))
-        indices.append(readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 2, indexType: indexType))
+        indices[writeIndex] = center
+        indices[writeIndex + 1] = readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 1, indexType: indexType)
+        indices[writeIndex + 2] = readIndex(sourceIndexBuffer, byteOffset: indexOffsetBytes, index: triangle + 2, indexType: indexType)
+        writeIndex += 3
     }
-
-    return indices.withUnsafeBytes { bytes in
-        guard let buffer = session.device.makeBuffer(bytes: bytes.baseAddress!, length: bytes.count, options: metallumSharedResourceOptions) else {
-            return nil
-        }
-        return (buffer, Int(generatedCount))
-    }
+    return generatedIndexCount
 }
 
 @_cdecl("metallum_create_system_default_device")
@@ -1700,6 +1694,7 @@ public func metallum_render_pass_draw_indexed(
 public func metallum_render_pass_draw_indexed_triangle_fan(
     _ renderPassPtr: UnsafeMutableRawPointer?,
     _ indexBufferPtr: UnsafeMutableRawPointer?,
+    _ fanIndexBufferPtr: UnsafeMutableRawPointer?,
     _ indexType: UInt64,
     _ indexOffsetBytes: UInt64,
     _ indexCount: UInt64,
@@ -1707,15 +1702,19 @@ public func metallum_render_pass_draw_indexed_triangle_fan(
     _ instanceCount: UInt64
 ) -> Int32 {
     return withMetalAutoreleasePool {
-    guard let session = renderPassSession(renderPassPtr), let indexBuffer: MTLBuffer = object(indexBufferPtr) else {
+    guard
+        let session = renderPassSession(renderPassPtr),
+        let indexBuffer: MTLBuffer = object(indexBufferPtr),
+        let fanIndexBuffer: MTLBuffer = object(fanIndexBufferPtr)
+    else {
         return 1
     }
     if indexCount < 3 {
         return 0
     }
-    guard let (fanIndexBuffer, generatedIndexCount) = createIndexedTriangleFanIndexBuffer(
-        session: session,
+    guard let generatedIndexCount = writeIndexedTriangleFanIndices(
         sourceIndexBuffer: indexBuffer,
+        destinationIndexBuffer: fanIndexBuffer,
         indexType: indexType,
         indexOffsetBytes: indexOffsetBytes,
         indexCount: indexCount
@@ -1760,18 +1759,19 @@ public func metallum_render_pass_draw(
 @_cdecl("metallum_render_pass_draw_triangle_fan")
 public func metallum_render_pass_draw_triangle_fan(
     _ renderPassPtr: UnsafeMutableRawPointer?,
+    _ fanIndexBufferPtr: UnsafeMutableRawPointer?,
     _ firstVertex: UInt64,
     _ vertexCount: UInt64,
     _ instanceCount: UInt64
 ) -> Int32 {
     return withMetalAutoreleasePool {
-    guard let session = renderPassSession(renderPassPtr) else {
+    guard let session = renderPassSession(renderPassPtr), let fanIndexBuffer: MTLBuffer = object(fanIndexBufferPtr) else {
         return 1
     }
     if vertexCount < 3 {
         return 0
     }
-    guard let (fanIndexBuffer, generatedIndexCount) = createSequentialTriangleFanIndexBuffer(session: session, vertexCount: vertexCount) else {
+    guard let generatedIndexCount = writeSequentialTriangleFanIndices(fanIndexBuffer, vertexCount: vertexCount) else {
         return 3
     }
     keepResourceAliveUntilCompleted(session, fanIndexBuffer)
