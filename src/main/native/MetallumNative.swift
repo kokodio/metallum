@@ -104,7 +104,6 @@ private final class RenderPassSession {
     let stencilFormat: MTLPixelFormat
     var viewportWidth: Double
     var viewportHeight: Double
-    var flipVertexY: Bool = false
 
     init(
         commandBuffer: MTLCommandBuffer,
@@ -524,7 +523,6 @@ private func reusePendingRenderPassIfCompatible(
 private func prepareRenderPassSessionForReuse(_ session: RenderPassSession, viewportWidth: Double, viewportHeight: Double) {
     session.viewportWidth = viewportWidth
     session.viewportHeight = viewportHeight
-    session.flipVertexY = false
     session.encoder.setViewport(MTLViewport(originX: 0.0, originY: 0.0, width: viewportWidth, height: viewportHeight, znear: 0.0, zfar: 1.0))
 }
 
@@ -1561,12 +1559,11 @@ public func metallum_render_pass_set_depth_stencil_state(
 }
 
 @_cdecl("metallum_render_pass_set_raster_state")
-public func metallum_render_pass_set_raster_state(_ renderPassPtr: UnsafeMutableRawPointer?, _ cullBackFaces: Int32, _ wireframe: Int32, _ flipVertexY: Int32) -> Int32 {
+public func metallum_render_pass_set_raster_state(_ renderPassPtr: UnsafeMutableRawPointer?, _ cullBackFaces: Int32, _ wireframe: Int32) -> Int32 {
     guard let session = renderPassSession(renderPassPtr) else {
         return 1
     }
-    session.flipVertexY = flipVertexY != 0
-    session.encoder.setFrontFacing(flipVertexY != 0 ? .clockwise : .counterClockwise)
+    session.encoder.setFrontFacing(.clockwise)
     session.encoder.setCullMode(cullBackFaces != 0 ? .back : .none)
     session.encoder.setTriangleFillMode(wireframe != 0 ? .lines : .fill)
     return 0

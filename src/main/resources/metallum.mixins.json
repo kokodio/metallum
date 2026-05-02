@@ -5,15 +5,15 @@
 	"mixins": [
 	],
 	"client": [
-		"PreferredGraphicsApiMixin",
-		"CompiledSectionMeshMixin",
-		"SectionCompilerMixin",
-		"MeshDataMixin",
-		"RenderSectionMixin",
-		"SectionRenderDispatcherMixin",
-		"LevelRendererMixin",
-		"accessor.MeshDataAccessor",
-		"accessor.SectionCompilerResultsAccessor"
+		"render.PreferredGraphicsApiMixin",
+		"optimization.CompiledSectionMeshMixin",
+		"optimization.SectionCompilerMixin",
+		"optimization.MeshDataMixin",
+		"optimization.RenderSectionMixin",
+		"optimization.SectionRenderDispatcherMixin",
+		"optimization.LevelRendererMixin",
+		"optimization.accessor.MeshDataAccessor",
+		"optimization.accessor.SectionCompilerResultsAccessor"
 	],
 	"injectors": {
 		"defaultRequire": 1
