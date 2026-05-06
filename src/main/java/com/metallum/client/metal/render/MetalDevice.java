@@ -9,6 +9,7 @@ import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.shaders.GpuDebugOptions;
 import com.mojang.blaze3d.shaders.ShaderSource;
+import com.mojang.blaze3d.systems.DeviceFeatures;
 import com.mojang.blaze3d.systems.DeviceInfo;
 import com.mojang.blaze3d.systems.DeviceLimits;
 import com.mojang.blaze3d.systems.DeviceType;
@@ -260,7 +261,8 @@ final class MetalDevice implements GpuDeviceBackend {
 			true,
 			"Metal",
 			1.0F,
-			new DeviceLimits(16, 256, 16384),
+			new DeviceLimits(16, 256, 16384, 1),
+			new DeviceFeatures(true),
 			underlyingExtensions,
 			new HintsAndWorkarounds(false, false),
 			type

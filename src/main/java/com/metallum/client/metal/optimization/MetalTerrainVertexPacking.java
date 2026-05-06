@@ -2,6 +2,7 @@ package com.metallum.client.metal.optimization;
 
 import com.metallum.mixin.optimization.accessor.MeshDataAccessor;
 import com.metallum.mixin.optimization.accessor.SectionCompilerResultsAccessor;
+import com.mojang.blaze3d.PrimitiveTopology;
 import com.mojang.blaze3d.vertex.ByteBufferBuilder;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.MeshData;
@@ -148,7 +149,7 @@ public final class MetalTerrainVertexPacking {
 	}
 
 	private static boolean isBlockQuadMesh(final MeshData.DrawState drawState) {
-		return drawState.format() == DefaultVertexFormat.BLOCK && drawState.mode() == VertexFormat.Mode.QUADS;
+		return drawState.format() == DefaultVertexFormat.BLOCK && drawState.primitiveTopology() == PrimitiveTopology.QUADS;
 	}
 
 	private static boolean packVertices(final long sourceBase, final long destinationBase, final int vertexCount) {

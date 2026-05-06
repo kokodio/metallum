@@ -1,6 +1,7 @@
 package com.metallum.client.metal.render;
 
 import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.sun.jna.Pointer;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -80,10 +81,6 @@ final class MetalGpuBuffer extends GpuBuffer {
 		return this.storage.duplicate().order(this.storage.order());
 	}
 
-	boolean hasCpuStorage() {
-		return this.storage != null;
-	}
-
 	Pointer nativeHandle() {
 		if (this.nativeHandle == null) {
 			throw new IllegalStateException("Native Metal buffer is closed");
@@ -108,6 +105,25 @@ final class MetalGpuBuffer extends GpuBuffer {
 			this.nativeHandle = null;
 			this.device.queueBufferRecycle(handle, this.allocationSize, this.resourceOptions);
 		}
+	}
+
+	@Override
+	public GpuBufferSlice.MappedView map(final long offset, final long length, final boolean read, final boolean write) {
+		if (this.isClosed()) {
+			throw new IllegalStateException("Buffer already closed");
+		}
+		if (!read && !write) {
+			throw new IllegalArgumentException("At least read or write must be true");
+		}
+		if (read && (this.usage() & GpuBuffer.USAGE_MAP_READ) == 0) {
+			throw new IllegalStateException("Buffer is not readable");
+		}
+		if (write && (this.usage() & GpuBuffer.USAGE_MAP_WRITE) == 0) {
+			throw new IllegalStateException("Buffer is not writable");
+		}
+		ByteBuffer mapped = this.sliceStorage(offset, length);
+		return new GpuBufferSlice.MappedView(this.slice(offset, length), mapped, () -> {
+		});
 	}
 
 	private static boolean isCpuAccessible(@GpuBuffer.Usage final int usage) {

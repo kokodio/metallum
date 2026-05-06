@@ -3,7 +3,7 @@ import Metal
 import QuartzCore
 import simd
 
-private let metallumVertexBufferSlot = 30
+private let metallumMaxVertexBufferSlot = 30
 private let metallumMaxSubmitsInFlight = 2
 private let metallumSharedResourceOptions: MTLResourceOptions = .storageModeShared
 
@@ -25,9 +25,12 @@ private struct DynamicPipelineKey: Hashable {
     let colorFormat: UInt
     let depthFormat: UInt
     let stencilFormat: UInt
-    let vertexStride: UInt64
     let vertexAttributes: [UInt64]
     let vertexOffsets: [UInt64]
+    let vertexAttributeBufferSlots: [UInt64]
+    let vertexBindingBufferSlots: [UInt64]
+    let vertexBindingStrides: [UInt64]
+    let vertexBindingStepRates: [UInt64]
     let blendEnabled: Bool
     let blendSourceRgb: UInt64
     let blendDestRgb: UInt64
@@ -349,21 +352,8 @@ private func samplerMipFilter(from code: UInt64) -> MTLSamplerMipFilter {
     }
 }
 
-private func clearColorFromARGB(_ argb: Int32) -> MTLClearColor {
-    let red = Double((argb >> 16) & 0xFF) / 255.0
-    let green = Double((argb >> 8) & 0xFF) / 255.0
-    let blue = Double(argb & 0xFF) / 255.0
-    let alpha = Double((argb >> 24) & 0xFF) / 255.0
-    return MTLClearColor(red: red, green: green, blue: blue, alpha: alpha)
-}
-
-private func colorVectorFromARGB(_ argb: Int32) -> SIMD4<Float> {
-    SIMD4<Float>(
-        Float((argb >> 16) & 0xFF) / 255.0,
-        Float((argb >> 8) & 0xFF) / 255.0,
-        Float(argb & 0xFF) / 255.0,
-        Float((argb >> 24) & 0xFF) / 255.0
-    )
+private func makeClearColor(red: Float, green: Float, blue: Float, alpha: Float) -> MTLClearColor {
+    MTLClearColor(red: Double(red), green: Double(green), blue: Double(blue), alpha: Double(alpha))
 }
 
 private func stringFromOptionalCString(_ pointer: UnsafePointer<CChar>?) -> String? {
@@ -531,7 +521,7 @@ private func encodeClearDraw(
     pipeline: MTLRenderPipelineState,
     textureWidth: Int,
     textureHeight: Int,
-    clearColor: Int32,
+    clearColor: SIMD4<Float>,
     scissorRect: MTLScissorRect,
     depthState: MTLDepthStencilState? = nil,
     clearDepth: Double = 0.0
@@ -543,7 +533,7 @@ private func encodeClearDraw(
         viewportSize: SIMD2<Float>(Float(textureWidth), Float(textureHeight)),
         z: depthState == nil ? 0.0 : Float(max(0.0, min(clearDepth, 1.0))),
         _padding0: 0.0,
-        color: colorVectorFromARGB(clearColor),
+        color: clearColor,
         uvMin: SIMD2<Float>(0.0, 0.0),
         uvMax: SIMD2<Float>(0.0, 0.0)
     )
@@ -875,10 +865,14 @@ private func ensureDynamicPipeline(
     colorFormat: MTLPixelFormat,
     depthFormat: MTLPixelFormat,
     stencilFormat: MTLPixelFormat,
-    vertexStride: UInt64,
     vertexAttributeFormats: UnsafePointer<UInt64>?,
     vertexAttributeOffsets: UnsafePointer<UInt64>?,
+    vertexAttributeBufferSlots: UnsafePointer<UInt64>?,
     vertexAttributeCount: UInt64,
+    vertexBindingBufferSlots: UnsafePointer<UInt64>?,
+    vertexBindingStrides: UnsafePointer<UInt64>?,
+    vertexBindingStepRates: UnsafePointer<UInt64>?,
+    vertexBindingCount: UInt64,
     blendEnabled: Bool,
     blendSourceRgb: UInt64,
     blendDestRgb: UInt64,
@@ -890,6 +884,18 @@ private func ensureDynamicPipeline(
 ) -> MTLRenderPipelineState? {
     let formats = copiedArray(vertexAttributeFormats, count: vertexAttributeCount)
     let offsets = copiedArray(vertexAttributeOffsets, count: vertexAttributeCount)
+    let attributeBufferSlots = copiedArray(vertexAttributeBufferSlots, count: vertexAttributeCount)
+    let bindingBufferSlots = copiedArray(vertexBindingBufferSlots, count: vertexBindingCount)
+    let bindingStrides = copiedArray(vertexBindingStrides, count: vertexBindingCount)
+    let bindingStepRates = copiedArray(vertexBindingStepRates, count: vertexBindingCount)
+    guard formats.count == offsets.count,
+          formats.count == attributeBufferSlots.count,
+          bindingBufferSlots.count == bindingStrides.count,
+          bindingBufferSlots.count == bindingStepRates.count
+    else {
+        return nil
+    }
+
     let key = DynamicPipelineKey(
         deviceAddress: objectAddress(device),
         vertexSource: vertexSource,
@@ -899,9 +905,12 @@ private func ensureDynamicPipeline(
         colorFormat: colorFormat.rawValue,
         depthFormat: depthFormat.rawValue,
         stencilFormat: stencilFormat.rawValue,
-        vertexStride: vertexStride,
         vertexAttributes: formats,
         vertexOffsets: offsets,
+        vertexAttributeBufferSlots: attributeBufferSlots,
+        vertexBindingBufferSlots: bindingBufferSlots,
+        vertexBindingStrides: bindingStrides,
+        vertexBindingStepRates: bindingStepRates,
         blendEnabled: blendEnabled,
         blendSourceRgb: blendSourceRgb,
         blendDestRgb: blendDestRgb,
@@ -960,10 +969,23 @@ private func ensureDynamicPipeline(
                 }
                 vertexDescriptor.attributes[index].format = format
                 vertexDescriptor.attributes[index].offset = Int(offsets[index])
-                vertexDescriptor.attributes[index].bufferIndex = metallumVertexBufferSlot
+                vertexDescriptor.attributes[index].bufferIndex = Int(attributeBufferSlots[index])
             }
-            vertexDescriptor.layouts[metallumVertexBufferSlot].stride = Int(vertexStride)
-            vertexDescriptor.layouts[metallumVertexBufferSlot].stepFunction = .perVertex
+            for index in 0..<Int(vertexBindingCount) {
+                let bufferSlot = Int(bindingBufferSlots[index])
+                if bufferSlot < 0 || bufferSlot > metallumMaxVertexBufferSlot {
+                    NSLog("[metallum] Unsupported vertex buffer slot: %d", bufferSlot)
+                    return nil
+                }
+                vertexDescriptor.layouts[bufferSlot].stride = Int(bindingStrides[index])
+                if bindingStepRates[index] > 0 {
+                    vertexDescriptor.layouts[bufferSlot].stepFunction = .perInstance
+                    vertexDescriptor.layouts[bufferSlot].stepRate = Int(bindingStepRates[index])
+                } else {
+                    vertexDescriptor.layouts[bufferSlot].stepFunction = .perVertex
+                    vertexDescriptor.layouts[bufferSlot].stepRate = 1
+                }
+            }
             descriptor.vertexDescriptor = vertexDescriptor
         }
 
@@ -1394,7 +1416,10 @@ public func metallum_begin_render_pass(
     _ viewportWidth: Double,
     _ viewportHeight: Double,
     _ clearColorEnabled: Int32,
-    _ clearColor: Int32,
+    _ clearColorRed: Float,
+    _ clearColorGreen: Float,
+    _ clearColorBlue: Float,
+    _ clearColorAlpha: Float,
     _ clearDepthEnabled: Int32,
     _ clearDepth: Double
 ) -> UnsafeMutableRawPointer? {
@@ -1430,7 +1455,7 @@ public func metallum_begin_render_pass(
     renderPass.colorAttachments[0].texture = colorTexture
     if clearColorEnabled != 0 {
         renderPass.colorAttachments[0].loadAction = .clear
-        renderPass.colorAttachments[0].clearColor = clearColorFromARGB(clearColor)
+        renderPass.colorAttachments[0].clearColor = makeClearColor(red: clearColorRed, green: clearColorGreen, blue: clearColorBlue, alpha: clearColorAlpha)
     } else {
         renderPass.colorAttachments[0].loadAction = .load
     }
@@ -1481,10 +1506,14 @@ public func metallum_create_render_pipeline(
     _ colorFormat: UInt64,
     _ depthFormat: UInt64,
     _ stencilFormat: UInt64,
-    _ vertexStride: UInt64,
     _ vertexAttributeFormats: UnsafePointer<UInt64>?,
     _ vertexAttributeOffsets: UnsafePointer<UInt64>?,
+    _ vertexAttributeBufferSlots: UnsafePointer<UInt64>?,
     _ vertexAttributeCount: UInt64,
+    _ vertexBindingBufferSlots: UnsafePointer<UInt64>?,
+    _ vertexBindingStrides: UnsafePointer<UInt64>?,
+    _ vertexBindingStepRates: UnsafePointer<UInt64>?,
+    _ vertexBindingCount: UInt64,
     _ blendEnabled: Int32,
     _ blendSourceRgb: UInt64,
     _ blendDestRgb: UInt64,
@@ -1514,10 +1543,14 @@ public func metallum_create_render_pipeline(
         colorFormat: MTLPixelFormat(rawValue: UInt(colorFormat)) ?? .invalid,
         depthFormat: MTLPixelFormat(rawValue: UInt(depthFormat)) ?? .invalid,
         stencilFormat: MTLPixelFormat(rawValue: UInt(stencilFormat)) ?? .invalid,
-        vertexStride: vertexStride,
         vertexAttributeFormats: vertexAttributeFormats,
         vertexAttributeOffsets: vertexAttributeOffsets,
+        vertexAttributeBufferSlots: vertexAttributeBufferSlots,
         vertexAttributeCount: vertexAttributeCount,
+        vertexBindingBufferSlots: vertexBindingBufferSlots,
+        vertexBindingStrides: vertexBindingStrides,
+        vertexBindingStepRates: vertexBindingStepRates,
+        vertexBindingCount: vertexBindingCount,
         blendEnabled: blendEnabled != 0,
         blendSourceRgb: blendSourceRgb,
         blendDestRgb: blendDestRgb,
@@ -1574,8 +1607,11 @@ public func metallum_render_pass_set_vertex_buffer(_ renderPassPtr: UnsafeMutabl
     guard let session = renderPassSession(renderPassPtr) else {
         return 1
     }
+    if slot > UInt64(metallumMaxVertexBufferSlot) {
+        return 2
+    }
     let buffer: MTLBuffer? = object(bufferPtr)
-    session.encoder.setVertexBuffer(buffer, offset: Int(offset), index: metallumVertexBufferSlot + Int(slot))
+    session.encoder.setVertexBuffer(buffer, offset: Int(offset), index: Int(slot))
     return 0
 }
 
@@ -1922,7 +1958,10 @@ public func metallum_clear_texture(
     _ commandQueuePtr: UnsafeMutableRawPointer?,
     _ texturePtr: UnsafeMutableRawPointer?,
     _ clearColorEnabled: Int32,
-    _ clearColor: Int32,
+    _ clearColorRed: Float,
+    _ clearColorGreen: Float,
+    _ clearColorBlue: Float,
+    _ clearColorAlpha: Float,
     _ clearDepthEnabled: Int32,
     _ clearDepth: Double
 ) -> Int32 {
@@ -1952,7 +1991,7 @@ public func metallum_clear_texture(
         renderPass.colorAttachments[0].texture = texture
         if clearColorEnabled != 0 {
             renderPass.colorAttachments[0].loadAction = .clear
-            renderPass.colorAttachments[0].clearColor = clearColorFromARGB(clearColor)
+            renderPass.colorAttachments[0].clearColor = makeClearColor(red: clearColorRed, green: clearColorGreen, blue: clearColorBlue, alpha: clearColorAlpha)
         } else {
             renderPass.colorAttachments[0].loadAction = .load
         }
@@ -1971,7 +2010,10 @@ public func metallum_clear_texture(
 private func clearColorDepthTextures(
     _ commandQueuePtr: UnsafeMutableRawPointer?,
     _ colorTexturePtr: UnsafeMutableRawPointer?,
-    _ clearColor: Int32,
+    _ clearColorRed: Float,
+    _ clearColorGreen: Float,
+    _ clearColorBlue: Float,
+    _ clearColorAlpha: Float,
     _ depthTexturePtr: UnsafeMutableRawPointer?,
     _ clearDepth: Double
 ) -> Int32 {
@@ -1990,7 +2032,7 @@ private func clearColorDepthTextures(
     let renderPass = MTLRenderPassDescriptor()
     renderPass.colorAttachments[0].texture = colorTexture
     renderPass.colorAttachments[0].loadAction = .clear
-    renderPass.colorAttachments[0].clearColor = clearColorFromARGB(clearColor)
+    renderPass.colorAttachments[0].clearColor = makeClearColor(red: clearColorRed, green: clearColorGreen, blue: clearColorBlue, alpha: clearColorAlpha)
     renderPass.colorAttachments[0].storeAction = .store
 
     renderPass.depthAttachment.texture = depthTexture
@@ -2018,7 +2060,10 @@ private func clearColorDepthTextures(
 public func metallum_clear_color_depth_textures_region(
     _ commandQueuePtr: UnsafeMutableRawPointer?,
     _ colorTexturePtr: UnsafeMutableRawPointer?,
-    _ clearColor: Int32,
+    _ clearColorRed: Float,
+    _ clearColorGreen: Float,
+    _ clearColorBlue: Float,
+    _ clearColorAlpha: Float,
     _ depthTexturePtr: UnsafeMutableRawPointer?,
     _ clearDepth: Double,
     _ x: Int32,
@@ -2048,7 +2093,7 @@ public func metallum_clear_color_depth_textures_region(
     }
     let scissorRect = MTLScissorRect(x: clampedX, y: clampedY, width: clampedMaxX - clampedX, height: clampedMaxY - clampedY)
     if clampedX == 0 && clampedY == 0 && clampedMaxX == textureWidth && clampedMaxY == textureHeight {
-        return clearColorDepthTextures(commandQueuePtr, colorTexturePtr, clearColor, depthTexturePtr, clearDepth)
+        return clearColorDepthTextures(commandQueuePtr, colorTexturePtr, clearColorRed, clearColorGreen, clearColorBlue, clearColorAlpha, depthTexturePtr, clearDepth)
     }
 
     guard
@@ -2084,7 +2129,7 @@ public func metallum_clear_color_depth_textures_region(
         pipeline: pipeline,
         textureWidth: textureWidth,
         textureHeight: textureHeight,
-        clearColor: clearColor,
+        clearColor: SIMD4<Float>(clearColorRed, clearColorGreen, clearColorBlue, clearColorAlpha),
         scissorRect: scissorRect,
         depthState: depthState,
         clearDepth: clearDepth

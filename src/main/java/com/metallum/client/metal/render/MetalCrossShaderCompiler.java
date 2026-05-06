@@ -61,7 +61,7 @@ final class MetalCrossShaderCompiler {
 				addToBindGroup(layoutEntries, vertexSpirv, pipeline);
 				addToBindGroup(layoutEntries, fragmentSpirv, pipeline);
 				List<String> vertexOutputs = extractVariableNames(vertexSpirv.outputs());
-				vertexSpirv.rebind(pipeline.getVertexFormat().getElementAttributeNames(), layoutEntries);
+				vertexSpirv.rebind(MetalPipelineSupport.vertexAttributeNames(pipeline), layoutEntries);
 				fragmentSpirv.rebind(vertexOutputs, layoutEntries);
 
 				String vertexMsl = spirvToMsl(vertexSpirv.spirv());

@@ -1,11 +1,16 @@
 package com.metallum.client.metal.render;
 
 import com.mojang.blaze3d.GpuFormat;
+import com.mojang.blaze3d.PrimitiveTopology;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexFormatElement;
+import com.sun.jna.Pointer;
+import java.util.ArrayList;
+import java.util.List;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.Nullable;
-import com.sun.jna.Pointer;
 
 @Environment(EnvType.CLIENT)
 final class MetalPipelineSupport {
@@ -21,26 +26,16 @@ final class MetalPipelineSupport {
 		return leftValue == rightValue;
 	}
 
-	static long[] vertexAttributeFormats(final VertexFormat vertexFormat) {
-		java.util.List<com.mojang.blaze3d.vertex.VertexFormatElement> elements = vertexFormat.getElements();
-		long[] result = new long[elements.size()];
-		for (int i = 0; i < elements.size(); i++) {
-			long formatCode = vertexAttributeFormatCode(elements.get(i).format());
-			if (formatCode == 0L) {
-				throw new IllegalStateException("Unsupported vertex attribute format: " + elements.get(i).format());
+	static List<String> vertexAttributeNames(final RenderPipeline pipeline) {
+		List<String> names = new ArrayList<>();
+		for (VertexFormat binding : pipeline.getVertexFormatBindings()) {
+			if (binding != null) {
+				for (VertexFormatElement element : binding.getElements()) {
+					names.add(element.name());
+				}
 			}
-			result[i] = formatCode;
 		}
-		return result;
-	}
-
-	static long[] vertexAttributeOffsets(final VertexFormat vertexFormat) {
-		java.util.List<com.mojang.blaze3d.vertex.VertexFormatElement> elements = vertexFormat.getElements();
-		long[] result = new long[elements.size()];
-		for (int i = 0; i < elements.size(); i++) {
-			result[i] = vertexFormat.getOffset(elements.get(i));
-		}
-		return result;
+		return names;
 	}
 
 	static long texelBufferPixelFormatCode(final GpuFormat format) {
@@ -87,7 +82,7 @@ final class MetalPipelineSupport {
 		};
 	}
 
-	static long primitiveTypeCode(final VertexFormat.Mode mode) {
+	static long primitiveTypeCode(final PrimitiveTopology mode) {
 		return switch (mode) {
 			case TRIANGLES, QUADS, LINES -> TRIANGLE_PRIMITIVE;
 			case TRIANGLE_STRIP -> 1L;
@@ -142,7 +137,7 @@ final class MetalPipelineSupport {
 		};
 	}
 
-	private static long vertexAttributeFormatCode(final GpuFormat format) {
+	static long vertexAttributeFormatCode(final GpuFormat format) {
 		return switch (format) {
 			case R32_FLOAT -> 1L;
 			case RG32_FLOAT -> 2L;

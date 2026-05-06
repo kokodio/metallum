@@ -22,6 +22,7 @@ final class MetalNativeBridge {
 	private static final String RESOURCE_PATH = "/natives/macos/libmetallum.dylib";
 	private static final ValueLayout.OfInt INT = ValueLayout.JAVA_INT;
 	private static final ValueLayout.OfLong LONG = ValueLayout.JAVA_LONG;
+	private static final ValueLayout.OfFloat FLOAT = ValueLayout.JAVA_FLOAT;
 	private static final ValueLayout.OfDouble DOUBLE = ValueLayout.JAVA_DOUBLE;
 	private static final Linker LINKER = Linker.nativeLinker();
 
@@ -110,7 +111,22 @@ final class MetalNativeBridge {
 		this.beginRenderPass = downcall(
 			lookup,
 			"metallum_begin_render_pass",
-			FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, ValueLayout.ADDRESS, DOUBLE, DOUBLE, INT, INT, INT, DOUBLE)
+			FunctionDescriptor.of(
+				ValueLayout.ADDRESS,
+				ValueLayout.ADDRESS,
+				ValueLayout.ADDRESS,
+				ValueLayout.ADDRESS,
+				ValueLayout.ADDRESS,
+				DOUBLE,
+				DOUBLE,
+				INT,
+				FLOAT,
+				FLOAT,
+				FLOAT,
+				FLOAT,
+				INT,
+				DOUBLE
+			)
 		);
 		this.createRenderPipeline = downcall(
 			lookup,
@@ -125,7 +141,11 @@ final class MetalNativeBridge {
 				LONG,
 				LONG,
 				LONG,
+				ValueLayout.ADDRESS,
+				ValueLayout.ADDRESS,
+				ValueLayout.ADDRESS,
 				LONG,
+				ValueLayout.ADDRESS,
 				ValueLayout.ADDRESS,
 				ValueLayout.ADDRESS,
 				LONG,
@@ -160,11 +180,29 @@ final class MetalNativeBridge {
 		this.waitForSubmitCompletion = downcall(lookup, "metallum_wait_for_submit_completion", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, LONG, LONG));
 		this.releaseObject = downcall(lookup, "metallum_release_object", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
 		this.waitForCommandQueueIdle = downcall(lookup, "metallum_wait_for_command_queue_idle", FunctionDescriptor.of(INT, ValueLayout.ADDRESS));
-		this.clearTexture = downcall(lookup, "metallum_clear_texture", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, INT, INT, DOUBLE));
+		this.clearTexture = downcall(
+			lookup,
+			"metallum_clear_texture",
+			FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, FLOAT, FLOAT, FLOAT, FLOAT, INT, DOUBLE)
+		);
 		this.clearColorDepthTexturesRegion = downcall(
 			lookup,
 			"metallum_clear_color_depth_textures_region",
-			FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, INT, ValueLayout.ADDRESS, DOUBLE, INT, INT, INT, INT)
+			FunctionDescriptor.of(
+				INT,
+				ValueLayout.ADDRESS,
+				ValueLayout.ADDRESS,
+				FLOAT,
+				FLOAT,
+				FLOAT,
+				FLOAT,
+				ValueLayout.ADDRESS,
+				DOUBLE,
+				INT,
+				INT,
+				INT,
+				INT
+			)
 		);
 		this.getBufferContents = downcall(lookup, "metallum_get_buffer_contents", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
 	}
@@ -430,7 +468,10 @@ final class MetalNativeBridge {
 		final double viewportWidth,
 		final double viewportHeight,
 		final int clearColorEnabled,
-		final int clearColor,
+		final float clearColorRed,
+		final float clearColorGreen,
+		final float clearColorBlue,
+		final float clearColorAlpha,
 		final int clearDepthEnabled,
 		final double clearDepth,
 		final String label
@@ -444,7 +485,10 @@ final class MetalNativeBridge {
 				viewportWidth,
 				viewportHeight,
 				clearColorEnabled,
-				clearColor,
+				clearColorRed,
+				clearColorGreen,
+				clearColorBlue,
+				clearColorAlpha,
 				clearDepthEnabled,
 				clearDepth
 			));
@@ -462,10 +506,14 @@ final class MetalNativeBridge {
 		final long colorFormat,
 		final long depthFormat,
 		final long stencilFormat,
-		final long vertexStride,
 		final long[] vertexAttributeFormats,
 		final long[] vertexAttributeOffsets,
+		final long[] vertexAttributeBufferSlots,
 		final long vertexAttributeCount,
+		final long[] vertexBindingBufferSlots,
+		final long[] vertexBindingStrides,
+		final long[] vertexBindingStepRates,
+		final long vertexBindingCount,
 		final int blendEnabled,
 		final long blendSourceRgb,
 		final long blendDestRgb,
@@ -485,10 +533,14 @@ final class MetalNativeBridge {
 				colorFormat,
 				depthFormat,
 				stencilFormat,
-				vertexStride,
 				toLongArray(arena, vertexAttributeFormats),
 				toLongArray(arena, vertexAttributeOffsets),
+				toLongArray(arena, vertexAttributeBufferSlots),
 				vertexAttributeCount,
+				toLongArray(arena, vertexBindingBufferSlots),
+				toLongArray(arena, vertexBindingStrides),
+				toLongArray(arena, vertexBindingStepRates),
+				vertexBindingCount,
 				blendEnabled,
 				blendSourceRgb,
 				blendDestRgb,
@@ -753,7 +805,10 @@ final class MetalNativeBridge {
 		final Pointer commandQueue,
 		final Pointer texture,
 		final int clearColorEnabled,
-		final int clearColor,
+		final float clearColorRed,
+		final float clearColorGreen,
+		final float clearColorBlue,
+		final float clearColorAlpha,
 		final int clearDepthEnabled,
 		final double clearDepth
 	) {
@@ -762,7 +817,10 @@ final class MetalNativeBridge {
 				toSegment(commandQueue),
 				toSegment(texture),
 				clearColorEnabled,
-				clearColor,
+				clearColorRed,
+				clearColorGreen,
+				clearColorBlue,
+				clearColorAlpha,
 				clearDepthEnabled,
 				clearDepth
 			);
@@ -774,7 +832,10 @@ final class MetalNativeBridge {
 	int metallum_clear_color_depth_textures_region(
 		final Pointer commandQueue,
 		final Pointer colorTexture,
-		final int clearColor,
+		final float clearColorRed,
+		final float clearColorGreen,
+		final float clearColorBlue,
+		final float clearColorAlpha,
 		final Pointer depthTexture,
 		final double clearDepth,
 		final int x,
@@ -786,7 +847,10 @@ final class MetalNativeBridge {
 			return (int)this.clearColorDepthTexturesRegion.invokeExact(
 				toSegment(commandQueue),
 				toSegment(colorTexture),
-				clearColor,
+				clearColorRed,
+				clearColorGreen,
+				clearColorBlue,
+				clearColorAlpha,
 				toSegment(depthTexture),
 				clearDepth,
 				x,
