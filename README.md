@@ -1,13 +1,11 @@
-# Metallum
+## Metallum
+Metallum is an experimental rendering backend for Minecraft on macOS that uses Apple’s Metal API instead of OpenGL/Vulkan. It provides a more native rendering path and aims to improve performance and efficiency on Apple Silicon.
 
-Metallum is a Metal powered rendering backend for Minecraft on macOS, aiming to improve performance and efficiency on Apple Silicon systems. It builds upon the existing OpenGL/Vulkan backend abstraction. This project also serves as a demonstration of what a native Metal backend could look like, with the hope that Mojang may eventually decide to implement a native rendering path for macOS.
+This project is still experimental. Performance, stability, and compatibility may vary depending on your system and installed mods. If you encounter bugs, please report them on GitHub.
 
-# Perfomance
+vibecoded as hell
 
-Measured framerate on Apple M4 under the same scene and settings: 2K, 16 chunks, seed 1
+## Requirements
+- macOS
+- Apple Silicon (M1 or newer)
 
-| API    | Average FPS |
-|--------|-------------|
-| Metal  | 340         |
-| Vulkan | 235         |
-| OpenGL | 224         |
