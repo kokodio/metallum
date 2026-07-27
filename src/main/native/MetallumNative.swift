@@ -1234,6 +1234,8 @@ public func metallum_configure_layer(_ layer: CAMetalLayer, _ width: Double, _ h
     layer.allowsNextDrawableTimeout = false
     layer.presentsWithTransaction = false
     layer.displaySyncEnabled = immediatePresentMode == 0
+    // FIFO=2 (lower latency), MAILBOX=3 (higher throughput)
+    layer.maximumDrawableCount = immediatePresentMode == 0 ? 2 : 3
 }
 
 @_cdecl("metallum_MTLCommandBuffer_encodePresentTextureToDrawable")

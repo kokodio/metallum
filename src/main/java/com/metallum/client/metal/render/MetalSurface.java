@@ -17,7 +17,9 @@ import java.util.Set;
 
 @Environment(EnvType.CLIENT)
 final class MetalSurface implements GpuSurfaceBackend {
-    private static final Set<GpuSurface.PresentMode> SUPPORTED_PRESENT_MODES = EnumSet.of(GpuSurface.PresentMode.FIFO, GpuSurface.PresentMode.MAILBOX);
+    private static final Set<GpuSurface.PresentMode> SUPPORTED_PRESENT_MODES = EnumSet.of(
+            GpuSurface.PresentMode.FIFO, GpuSurface.PresentMode.MAILBOX, GpuSurface.PresentMode.IMMEDIATE
+    );
     private final MetalDevice device;
     private final MemorySegment metalLayer;
     private GpuSurface.Configuration configuration;
@@ -34,11 +36,13 @@ final class MetalSurface implements GpuSurfaceBackend {
             throw new SurfaceException("Metal surface configuration must be positive, got " + config.width() + "x" + config.height());
         }
 
+        // 0 = FIFO (VSync ON),  1 = MAILBOX/IMMEDIATE (VSync OFF)
+        int syncMode = config.presentMode() == GpuSurface.PresentMode.FIFO ? 0 : 1;
         MetalNativeBridge.metallum_configure_layer(
                 this.metalLayer,
                 config.width(),
                 config.height(),
-                config.presentMode() == GpuSurface.PresentMode.MAILBOX ? 1 : 0
+                syncMode
         );
 
         this.configuration = config;
