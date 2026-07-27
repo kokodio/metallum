@@ -545,14 +545,19 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
         destroyQueue.add(destroyAction);
     }
 
+    /**
+     * Waits for the GPU to finish the work submitted at the given index.
+     * The in-flight ring buffer may overwrite old slots after MAX_SUBMITS_IN_FLIGHT
+     * successful submits — callers must ensure submitIndex is still valid.
+     */
     boolean awaitSubmitCompletion(final long submitIndex, final long timeoutMs) {
         if (submitIndex == currentSubmitIndex) {
             throw new IllegalStateException("Cannot wait on a fence for the current submit");
         }
-        for (InFlight f : inFlight) {
-            if (f != null && f.index == submitIndex) {
-                return MetalNativeBridge.metallum_semaphore_wait(f.completedSemaphore, Math.max(timeoutMs, 0L)) == 0;
-            }
+        int slot = (int) (submitIndex % MAX_SUBMITS_IN_FLIGHT);
+        InFlight f = inFlight[slot];
+        if (f != null && f.index == submitIndex) {
+            return MetalNativeBridge.metallum_semaphore_wait(f.completedSemaphore, Math.max(timeoutMs, 0L)) == 0;
         }
         return true;
     }

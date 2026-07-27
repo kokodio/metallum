@@ -30,7 +30,7 @@ public class Stats {
         long total = CREATED_BUFFERS.incrementAndGet();
 
         if (total % 100 == 0) {
-            StringBuilder sb = new StringBuilder();
+            StringBuilder sb = new StringBuilder(1024);
 
             sb.append("MetalGpuBuffer stats after ")
                     .append(total)

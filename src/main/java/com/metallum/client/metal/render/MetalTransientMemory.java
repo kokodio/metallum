@@ -6,8 +6,7 @@ import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.buffers.GpuBufferSlice.MappedView;
 import com.mojang.blaze3d.systems.TransientMemory;
 import com.mojang.blaze3d.util.TransientBlockAllocator;
-import it.unimi.dsi.fastutil.ints.IntArrayList;
-import it.unimi.dsi.fastutil.ints.IntComparator;
+import java.util.Comparator;
 import it.unimi.dsi.fastutil.objects.ReferenceArrayList;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -141,30 +140,47 @@ final class MetalTransientMemory implements TransientMemory {
     }
 
     private List<GpuBufferSlice> multiUpload(final List<ByteBuffer> data, final long alignment, @Usage final int usage) {
+        int n = data.size();
         ReferenceArrayList<GpuBufferSlice> uploaded = new ReferenceArrayList<>();
-        uploaded.size(data.size());
-        IntArrayList sortedIndices = IntArrayList.toList(IntStream.range(0, data.size()));
-        sortedIndices.sort(IntComparator.comparingInt(index -> data.get(index).remaining()));
+        uploaded.size(n);
 
-        while (!sortedIndices.isEmpty()) {
+        // Indices sorted by buffer size descending
+        Integer[] sorted = IntStream.range(0, n).boxed()
+                .sorted(Comparator.comparingInt(i -> -data.get(i).remaining()))
+                .toArray(Integer[]::new);
+        boolean[] allocated = new boolean[n];
+
+        int pendingCount = n;
+        int smallestUnallocated = n - 1; // index into sorted[] (smallest = last after descending sort)
+
+        while (pendingCount > 0) {
             boolean allocatedAnything = false;
 
-            for (int i = sortedIndices.size() - 1; i >= 0; i--) {
-                int bufferIndex = sortedIndices.getInt(i);
+            // Scan from largest to smallest, try to fit in current block
+            for (int i = 0; i < n && !allocatedAnything; i++) {
+                int bufferIndex = sorted[i];
+                if (allocated[bufferIndex]) continue;
+
                 ByteBuffer currentBuffer = data.get(bufferIndex);
                 if (gpuBlockAllocator.canAllocateInCurrentBlock(currentBuffer.remaining(), alignment)) {
-                    sortedIndices.removeInt(i);
+                    allocated[bufferIndex] = true;
+                    pendingCount--;
                     try (MappedView view = allocateGpuMapped(currentBuffer.remaining(), alignment, usage)) {
                         MemoryUtil.memCopy(currentBuffer, view.data());
                         uploaded.set(bufferIndex, view.slice());
                     }
                     allocatedAnything = true;
-                    break;
                 }
             }
 
             if (!allocatedAnything) {
-                int bufferIndex = sortedIndices.popInt();
+                // None fits in current block — allocate smallest to force a new block
+                while (smallestUnallocated >= 0 && allocated[sorted[smallestUnallocated]]) {
+                    smallestUnallocated--;
+                }
+                int bufferIndex = sorted[smallestUnallocated];
+                allocated[bufferIndex] = true;
+                pendingCount--;
                 ByteBuffer currentBuffer = data.get(bufferIndex);
                 try (MappedView view = allocateGpuMapped(currentBuffer.remaining(), alignment, usage)) {
                     MemoryUtil.memCopy(currentBuffer, view.data());

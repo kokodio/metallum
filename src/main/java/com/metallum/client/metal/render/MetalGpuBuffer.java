@@ -71,10 +71,10 @@ class MetalGpuBuffer extends GpuBuffer {
             throw new IllegalStateException("Buffer is not CPU-accessible");
         }
 
-        ByteBuffer duplicate = this.storage.duplicate().order(this.storage.order());
+        ByteBuffer duplicate = this.storage.duplicate();
         duplicate.position(Math.toIntExact(offset));
         duplicate.limit(Math.toIntExact(offset + length));
-        return duplicate.slice().order(this.storage.order());
+        return duplicate.slice();
     }
 
     MemorySegment nativeHandle() {
@@ -100,7 +100,7 @@ class MetalGpuBuffer extends GpuBuffer {
         if (this.storage == null) {
             throw new IllegalStateException("Buffer is not CPU-accessible");
         }
-        return this.storage.duplicate().order(this.storage.order());
+        return this.storage.duplicate();
     }
 
     void swapBacking(final MemorySegment handle, final ByteBuffer storage) {
