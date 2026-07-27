@@ -40,6 +40,7 @@ public final class MetalNativeBridge {
             createSystemDefaultDevice = downcall(lookup, "metallum_create_system_default_device", FunctionDescriptor.of(ValueLayout.ADDRESS));
             copyDeviceName = downcall(lookup, "metallum_copy_device_name", FunctionDescriptor.of(INT, ValueLayout.ADDRESS, ValueLayout.ADDRESS, LONG));
             NSWindowBackingScaleFactor = downcall(lookup, "metallum_NSWindow_backingScaleFactor", FunctionDescriptor.of(DOUBLE, ValueLayout.ADDRESS));
+            NSWindowIsVisible = downcall(lookup, "metallum_NSWindow_isVisible", FunctionDescriptor.of(INT, ValueLayout.ADDRESS));
             createMetalLayer = downcall(lookup, "metallum_create_metal_layer", FunctionDescriptor.of(ValueLayout.ADDRESS, ValueLayout.ADDRESS, DOUBLE));
             NSViewSetMetalLayer = downcall(lookup, "metallum_NSView_setMetalLayer", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS, ValueLayout.ADDRESS));
             NSViewClearLayer = downcall(lookup, "metallum_NSView_clearLayer", FunctionDescriptor.ofVoid(ValueLayout.ADDRESS));
@@ -262,6 +263,7 @@ public final class MetalNativeBridge {
     private static final MethodHandle createSystemDefaultDevice;
     private static final MethodHandle copyDeviceName;
     private static final MethodHandle NSWindowBackingScaleFactor;
+    private static final MethodHandle NSWindowIsVisible;
     private static final MethodHandle createMetalLayer;
     private static final MethodHandle NSViewSetMetalLayer;
     private static final MethodHandle NSViewClearLayer;
@@ -362,6 +364,14 @@ public final class MetalNativeBridge {
             return (double) NSWindowBackingScaleFactor.invokeExact(segment(window));
         } catch (Throwable throwable) {
             throw bridgeFailure("metallum_NSWindow_backingScaleFactor", throwable);
+        }
+    }
+
+    public static int metallum_NSWindow_isVisible(final MemorySegment window) {
+        try {
+            return (int) NSWindowIsVisible.invokeExact(segment(window));
+        } catch (Throwable throwable) {
+            throw bridgeFailure("metallum_NSWindow_isVisible", throwable);
         }
     }
 

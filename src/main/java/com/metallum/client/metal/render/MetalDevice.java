@@ -35,6 +35,7 @@ final class MetalDevice implements GpuDeviceBackend {
     private final MemorySegment metalDeviceHandle;
     private final MemorySegment metalLayer;
     private final MemorySegment cocoaView;
+    private final MemorySegment cocoaWindow;
     private final GpuDebugOptions debugOptions;
     private final MetalCommandEncoder commandEncoder;
     private final DeviceInfo deviceInfo;
@@ -50,13 +51,15 @@ final class MetalDevice implements GpuDeviceBackend {
             final MemorySegment metalDeviceHandle,
             final MemorySegment metalLayer,
             final String deviceName,
-            final MemorySegment cocoaView
+            final MemorySegment cocoaView,
+            final MemorySegment cocoaWindow
     ) {
         this.activeShaderSource = defaultShaderSource;
         this.debugOptions = debugOptions;
         this.metalDeviceHandle = metalDeviceHandle;
         this.metalLayer = metalLayer;
         this.cocoaView = cocoaView;
+        this.cocoaWindow = cocoaWindow;
         MetalNativeBridge.metallum_set_debug_labels_enabled(this.useLabels());
         this.commandQueue = MTLCommandQueue.create(metalDeviceHandle);
         MetalNativeBridge.metallum_init_pipelines(metalDeviceHandle);
@@ -66,7 +69,7 @@ final class MetalDevice implements GpuDeviceBackend {
 
     @Override
     public @NonNull GpuSurfaceBackend createSurface(final long windowHandle) {
-        return new MetalSurface(this, this.metalLayer);
+        return new MetalSurface(this, this.metalLayer, this.cocoaWindow);
     }
 
     @Override

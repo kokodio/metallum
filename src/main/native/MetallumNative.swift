@@ -392,6 +392,11 @@ public func metallum_NSWindow_backingScaleFactor(_ window: NSWindow) -> Double {
     Double(window.backingScaleFactor)
 }
 
+@_cdecl("metallum_NSWindow_isVisible")
+public func metallum_NSWindow_isVisible(_ window: NSWindow) -> Int32 {
+    window.isVisible ? 1 : 0
+}
+
 @_cdecl("metallum_create_metal_layer")
 public func metallum_create_metal_layer(
     _ device: MTLDevice,
