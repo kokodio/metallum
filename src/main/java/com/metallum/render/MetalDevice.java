@@ -134,7 +134,11 @@ final class MetalDevice implements GpuDeviceBackend {
     @Override
     public @NonNull GpuBuffer createBuffer(@Nullable final Supplier<String> label, @GpuBuffer.Usage final int usage, final ByteBuffer data) {
         MetalGpuBuffer buffer = (MetalGpuBuffer) this.createBuffer(label, usage | GpuBuffer.USAGE_COPY_DST, data.remaining());
-        this.commandEncoder.writeToBuffer(buffer.slice(), data.duplicate());
+        if (buffer.isCpuAccessible()) {
+            buffer.writeDirect(0L, data);
+        } else {
+            this.commandEncoder.writeToBuffer(buffer.slice(), data.duplicate());
+        }
         return buffer;
     }
 

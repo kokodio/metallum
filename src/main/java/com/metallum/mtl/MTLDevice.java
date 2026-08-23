@@ -31,7 +31,7 @@ public record MTLDevice(MemorySegment handle) {
     private static final Msg NEW_FUNCTION_WITH_NAME = Msg.of("newFunctionWithName:", true, ADDRESS, ADDRESS);
     private static final Msg NEW_RENDER_PIPELINE_STATE = Msg.of("newRenderPipelineStateWithDescriptor:error:", true, ADDRESS, ADDRESS, ADDRESS);
     private static final Msg LOCALIZED_DESCRIPTION = Msg.of("localizedDescription", ADDRESS);
-    private static final Msg MINIMUM_LINEAR_TEXTURE_ALIGNMENT = Msg.of("minimumLinearTextureAlignmentForPixelFormat:", JAVA_LONG, JAVA_LONG);
+    private static final Msg MINIMUM_TEXTURE_BUFFER_ALIGNMENT = Msg.of("minimumTextureBufferAlignmentForPixelFormat:", JAVA_LONG, JAVA_LONG);
     private static final Msg NAME = Msg.of("name", ADDRESS);
     private static final Msg MAX_BUFFER_LENGTH = Msg.of("maxBufferLength", JAVA_LONG);
     private static final Msg RECOMMENDED_MAX_WORKING_SET_SIZE = Msg.of("recommendedMaxWorkingSetSize", JAVA_LONG);
@@ -148,8 +148,8 @@ public record MTLDevice(MemorySegment handle) {
         }
     }
 
-    static long minimumLinearTextureAlignment(final MemorySegment device, final long pixelFormat) {
-        return MINIMUM_LINEAR_TEXTURE_ALIGNMENT.sendLong(device, pixelFormat);
+    static long minimumTextureBufferAlignment(final MemorySegment device, final long pixelFormat) {
+        return MINIMUM_TEXTURE_BUFFER_ALIGNMENT.sendLong(device, pixelFormat);
     }
 
     private static String errorDescription(final MemorySegment errorOut) {

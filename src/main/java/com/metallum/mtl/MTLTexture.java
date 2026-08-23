@@ -83,7 +83,7 @@ public final class MTLTexture {
             }
 
             MemorySegment device = DEVICE.sendPtr(buffer);
-            long alignment = MTLDevice.minimumLinearTextureAlignment(device, pixelFormat);
+            long alignment = MTLDevice.minimumTextureBufferAlignment(device, pixelFormat);
             if (alignment <= 0 || offset % alignment != 0) {
                 return MemorySegment.NULL;
             }

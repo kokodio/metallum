@@ -91,6 +91,14 @@ class MetalGpuBuffer extends GpuBuffer {
         return this.dynamic;
     }
 
+    boolean isCpuAccessible() {
+        return this.cpuAccessible;
+    }
+
+    void writeDirect(final long offset, final ByteBuffer data) {
+        this.sliceStorage(offset, data.remaining()).put(data.duplicate());
+    }
+
     long allocationSize() {
         return this.allocationSize;
     }
@@ -154,7 +162,8 @@ class MetalGpuBuffer extends GpuBuffer {
     }
 
     private static boolean isCpuAccessible(@GpuBuffer.Usage final int usage) {
-        return (usage & GpuBuffer.USAGE_MAP_READ) != 0
+        return (usage & GpuBuffer.USAGE_INDEX) != 0
+                || (usage & GpuBuffer.USAGE_MAP_READ) != 0
                 || (usage & GpuBuffer.USAGE_MAP_WRITE) != 0
                 || (usage & GpuBuffer.USAGE_HINT_CLIENT_STORAGE) != 0;
     }
