@@ -37,6 +37,19 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
     private final Map<MetalGpuTexture, Vector4fc> pendingColorClears = new IdentityHashMap<>();
     private final Map<MetalGpuTexture, Double> pendingDepthClears = new IdentityHashMap<>();
     private final MTLFence fence;
+    // With VSync off, frames hand their image to the present queue through these (see presentTextureToDrawable)
+    @Nullable
+    private MTLCommandQueue presentQueue;
+    @Nullable
+    private MTLSharedEvent frameEvent;
+    @Nullable
+    private MTLSharedEvent presentEvent;
+    private long frameEventValue;
+    private long presentEventValue;
+    private final PresentStaging[] presentStaging = {new PresentStaging(), new PresentStaging(), new PresentStaging()};
+    private int nextPresentStaging;
+    @Nullable
+    private PendingPresent pendingPresent;
     @Nullable
     private MetalRenderPass currentRenderPass;
     @Nullable
@@ -107,6 +120,9 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
             int slot = (int) (currentSubmitIndex % MAX_SUBMITS_IN_FLIGHT);
             submitSemaphores[slot].drainPermits();
             commandBuffer.commitWithCompletionBlock(submitSignalBlocks[slot]);
+            if (pendingPresent != null) {
+                submitPendingPresent();
+            }
 
             toClose = inFlight[slot];
             inFlight[slot] = new InFlight(currentSubmitIndex, commandBuffer);
@@ -241,8 +257,44 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
         flushPendingClear(source);
         submitRenderPass();
         endEncoder();
-        MTLCommandBuffer commandBuffer = commandBuffer();
-        commandBuffer.encodePresentTextureToDrawable(layer, source.nativeHandle(), fence);
+        if (!layer.isMailbox()) {
+            commandBuffer().encodePresentTextureToDrawable(layer, source.nativeHandle(), fence);
+            return;
+        }
+        // A command buffer that draws into a drawable can't complete until the display gives one back, and the game waits
+        // on recent frames (MappableRingBuffer, submits in flight), so with VSync off the frame only copies its image out
+        // and a command buffer on a second queue presents it once the frame is done on the GPU.
+        if (presentQueue == null) {
+            presentQueue = device.metalDevice().newCommandQueue();
+            frameEvent = device.metalDevice().newSharedEvent();
+            presentEvent = device.metalDevice().newSharedEvent();
+        }
+        PresentStaging staging = presentStaging[nextPresentStaging];
+        nextPresentStaging = (nextPresentStaging + 1) % presentStaging.length;
+        long width = MTLTexture.width(source.nativeHandle());
+        long height = MTLTexture.height(source.nativeHandle());
+        if (staging.texture == null || staging.width != width || staging.height != height || staging.format != source.mtlPixelFormat()) {
+            staging.replace(device, source.mtlPixelFormat(), width, height);
+        } else if (staging.readDoneValue > presentEvent.signaledValue()) {
+            commandBuffer().encodeWaitForEvent(presentEvent, staging.readDoneValue);
+        }
+        MTLBlitCommandEncoder blit = blitCommandEncoder();
+        blit.copyFromTextureToTexture(source.nativeHandle(), 0, 0, 0, 0, width, height, staging.texture, 0, 0, 0, 0);
+        endEncoder();
+        commandBuffer().encodeSignalEvent(frameEvent, ++frameEventValue);
+        pendingPresent = new PendingPresent(layer, staging, frameEventValue);
+    }
+
+    private void submitPendingPresent() {
+        PendingPresent present = pendingPresent;
+        pendingPresent = null;
+        MTLCommandBuffer presentBuffer = presentQueue.makeCommandBuffer(device.useLabels() ? "Metallum present" : null);
+        presentBuffer.encodeWaitForEvent(frameEvent, present.frameEventValue());
+        presentBuffer.encodePresentTextureToDrawable(present.layer(), present.staging().texture, null);
+        present.staging().readDoneValue = ++presentEventValue;
+        presentBuffer.encodeSignalEvent(presentEvent, presentEventValue);
+        presentBuffer.commit();
+        presentBuffer.close();
     }
 
     @Override
@@ -570,6 +622,14 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
             commandBuffer = null;
         }
         transientMemory.close();
+        for (PresentStaging staging : presentStaging) {
+            staging.close();
+        }
+        if (presentQueue != null) {
+            presentQueue.close();
+            ObjC.release(frameEvent.handle());
+            ObjC.release(presentEvent.handle());
+        }
         device.queueResourceRelease(fence.handle());
         destroyQueue.close();
         for (ArrayDeque<MTLBuffer> bucket : dynamicBackingPool.values()) {
@@ -651,5 +711,44 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
     }
 
     private record InFlight(long index, MTLCommandBuffer buffer) {
+    }
+
+    private static final class PresentStaging {
+        @Nullable
+        MemorySegment texture;
+        long width;
+        long height;
+        @Nullable
+        MTLPixelFormat format;
+        long readDoneValue;
+
+        void replace(final MetalDevice device, final MTLPixelFormat format, final long width, final long height) {
+            if (texture != null) {
+                ObjC.release(texture); // a present still reading it has it retained
+            }
+            try (MTLTextureDescriptor descriptor = MTLTextureDescriptor.create()) {
+                descriptor.pixelFormat(format);
+                descriptor.width(width);
+                descriptor.height(height);
+                descriptor.usage(MTLTextureUsage.ShaderRead.value);
+                descriptor.storageMode(MTLStorageMode.Private);
+                descriptor.hazardTrackingMode(MTLHazardTrackingMode.Untracked);
+                texture = device.metalDevice().newTexture(descriptor);
+            }
+            this.width = width;
+            this.height = height;
+            this.format = format;
+            this.readDoneValue = 0L;
+        }
+
+        void close() {
+            if (texture != null) {
+                ObjC.release(texture);
+                texture = null;
+            }
+        }
+    }
+
+    private record PendingPresent(CAMetalLayer layer, PresentStaging staging, long frameEventValue) {
     }
 }

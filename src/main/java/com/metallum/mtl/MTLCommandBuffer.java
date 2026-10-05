@@ -23,6 +23,8 @@ public final class MTLCommandBuffer {
     private static final Msg PRESENT_DRAWABLE = Msg.ofVoid("presentDrawable:", ADDRESS);
     private static final Msg COMMIT = Msg.ofVoid("commit");
     private static final Msg ADD_COMPLETED_HANDLER = Msg.ofVoid("addCompletedHandler:", ADDRESS);
+    private static final Msg ENCODE_SIGNAL_EVENT = Msg.ofVoid("encodeSignalEvent:value:", ADDRESS, JAVA_LONG);
+    private static final Msg ENCODE_WAIT_FOR_EVENT = Msg.ofVoid("encodeWaitForEvent:value:", ADDRESS, JAVA_LONG);
     private static final Msg STATUS = Msg.of("status", JAVA_LONG);
     private static final Msg WAIT_UNTIL_COMPLETED = Msg.ofVoid("waitUntilCompleted", true);
     private static final Msg PUSH_DEBUG_GROUP = Msg.ofVoid("pushDebugGroup:", ADDRESS);
@@ -130,6 +132,14 @@ public final class MTLCommandBuffer {
 
     void presentDrawable(final CAMetalDrawable drawable) {
         PRESENT_DRAWABLE.send(handle(), drawable.handle());
+    }
+
+    public void encodeSignalEvent(final MTLSharedEvent event, final long value) {
+        ENCODE_SIGNAL_EVENT.send(handle(), event.handle(), value);
+    }
+
+    public void encodeWaitForEvent(final MTLSharedEvent event, final long value) {
+        ENCODE_WAIT_FOR_EVENT.send(handle(), event.handle(), value);
     }
 
     public void commit() {

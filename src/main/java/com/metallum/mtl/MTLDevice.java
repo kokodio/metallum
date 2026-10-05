@@ -27,6 +27,7 @@ public record MTLDevice(MemorySegment handle) {
     private static final Msg NEW_SAMPLER_STATE = Msg.of("newSamplerStateWithDescriptor:", ADDRESS, ADDRESS);
     private static final Msg NEW_DEPTH_STENCIL_STATE = Msg.of("newDepthStencilStateWithDescriptor:", ADDRESS, ADDRESS);
     private static final Msg NEW_FENCE = Msg.of("newFence", ADDRESS);
+    private static final Msg NEW_SHARED_EVENT = Msg.of("newSharedEvent", ADDRESS);
     private static final Msg NEW_LIBRARY_WITH_SOURCE = Msg.of("newLibraryWithSource:options:error:", true, ADDRESS, ADDRESS, ADDRESS, ADDRESS);
     private static final Msg NEW_FUNCTION_WITH_NAME = Msg.of("newFunctionWithName:", true, ADDRESS, ADDRESS);
     private static final Msg NEW_RENDER_PIPELINE_STATE = Msg.of("newRenderPipelineStateWithDescriptor:error:", true, ADDRESS, ADDRESS, ADDRESS);
@@ -112,6 +113,14 @@ public record MTLDevice(MemorySegment handle) {
             throw new IllegalStateException("newFence returned nil");
         }
         return new MTLFence(fence);
+    }
+
+    public MTLSharedEvent newSharedEvent() {
+        MemorySegment event = NEW_SHARED_EVENT.sendPtr(handle);
+        if (ObjC.isNil(event)) {
+            throw new IllegalStateException("newSharedEvent returned nil");
+        }
+        return new MTLSharedEvent(event);
     }
 
     public MemorySegment newFunction(final String mslSource, final String entryPoint) {

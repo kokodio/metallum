@@ -57,7 +57,9 @@ final class MetalSurface implements GpuSurfaceBackend {
             throw new IllegalArgumentException("Metal surface requires MetalCommandEncoder");
         }
 
-        metalEncoder.presentTextureToDrawable(metalLayer, textureView);
+        if (metalLayer.shouldPresent()) {
+            metalEncoder.presentTextureToDrawable(metalLayer, textureView);
+        }
         this.pendingPresentEncoder = metalEncoder;
     }
 

@@ -302,6 +302,7 @@ public final class MTLBuiltinPipelines {
 
             encoder.endEncoding();
             commandBuffer.presentDrawable(drawable);
+            layer.presented(drawable);
         }
     }
 
