@@ -2,6 +2,7 @@ package com.metallum.mtl;
 
 import com.metallum.objc.Msg;
 import com.metallum.objc.ObjC;
+import com.mojang.blaze3d.systems.RenderPass;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.joml.Vector4fc;
@@ -130,7 +131,8 @@ public final class MTLRenderCommandEncoder extends MTLCommandEncoder {
             final double viewportWidth,
             final double viewportHeight,
             @Nullable final Vector4fc clearColor,
-            @Nullable final Double clearDepth
+            @Nullable final Double clearDepth,
+            final RenderPass.RenderArea area
     ) {
         MTLBuiltinPipelines.clearDraw(
                 this,
@@ -139,7 +141,11 @@ public final class MTLRenderCommandEncoder extends MTLCommandEncoder {
                 viewportWidth,
                 viewportHeight,
                 clearColor,
-                clearDepth
+                clearDepth,
+                area.x(),
+                area.y(),
+                area.width(),
+                area.height()
         );
     }
 

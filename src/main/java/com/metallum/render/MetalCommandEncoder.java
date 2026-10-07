@@ -132,26 +132,39 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
             final int viewportWidth,
             final int viewportHeight,
             @Nullable final Vector4fc clearColor,
-            @Nullable final Double clearDepth
+            @Nullable final Double clearDepth,
+            final RenderPass.RenderArea renderArea
     ) {
         MemorySegment colorAttachment = colorTextureView.nativeHandle();
         MemorySegment depthAttachment = depthTextureView == null ? MemorySegment.NULL : depthTextureView.nativeHandle();
+        boolean clear = clearColor != null || clearDepth != null;
+
         if (currentEncoder instanceof MTLRenderCommandEncoder enc
                 && MetalPipelineSupport.sameHandle(renderColorAttachment, colorAttachment)
                 && MetalPipelineSupport.sameHandle(renderDepthAttachment, depthAttachment)) {
-            if (clearColor != null || clearDepth != null) {
-                enc.clearDraw(
-                        colorAttachment,
-                        depthAttachment,
-                        viewportWidth,
-                        viewportHeight,
-                        clearColor,
-                        clearDepth
-                );
+            if (clear) {
+                enc.clearDraw(colorAttachment, depthAttachment, viewportWidth, viewportHeight, clearColor, clearDepth, renderArea);
             }
             return enc;
         }
 
+        if (!clear || renderArea.fillsTexture(colorTextureView)) {
+            return beginRenderEncoder(colorAttachment, clearColor, depthAttachment, clearDepth, viewportWidth, viewportHeight);
+        }
+
+        MTLRenderCommandEncoder enc = beginRenderEncoder(colorAttachment, null, depthAttachment, null, viewportWidth, viewportHeight);
+        enc.clearDraw(colorAttachment, depthAttachment, viewportWidth, viewportHeight, clearColor, clearDepth, renderArea);
+        return enc;
+    }
+
+    private MTLRenderCommandEncoder beginRenderEncoder(
+            final MemorySegment colorAttachment,
+            @Nullable final Vector4fc clearColor,
+            final MemorySegment depthAttachment,
+            @Nullable final Double clearDepth,
+            final int viewportWidth,
+            final int viewportHeight
+    ) {
         endEncoder();
         MTLRenderCommandEncoder encoder = commandBuffer().makeRenderCommandEncoder(
                 colorAttachment,
@@ -173,18 +186,15 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
         RenderPassDescriptor.Attachment<Optional<Vector4fc>> colorAttachment = descriptor.colorAttachments().getFirst();
         GpuTextureView colorTexture = colorAttachment.textureView();
         MetalGpuTexture colorTex = (MetalGpuTexture) colorTexture.texture();
-        Vector4fc colorClear = colorAttachment.clearValue().orElse(null);
-        Vector4fc pendingColor = pendingColorClears.get(colorTex);
-        if (pendingColor != null && colorClear == null) {
-            if (isFullTextureView(colorTexture)) {
-                pendingColorClears.remove(colorTex);
-                colorClear = pendingColor;
-            } else {
-                flushPendingClear(colorTex);
-            }
-        } else {
-            pendingColorClears.remove(colorTex);
+
+        assert descriptor.renderArea != null;
+        RenderPass.RenderArea renderArea = descriptor.renderArea;
+        boolean fullArea = renderArea.fillsTexture(colorTexture);
+        if (!fullArea || colorTexture.baseMipLevel() != 0) {
+            flushPendingClear(colorTex);
         }
+        Vector4fc pendingColor = pendingColorClears.remove(colorTex);
+        Vector4fc colorClear = colorAttachment.clearValue().orElse(pendingColor);
         colorTex.markContentsDirty();
 
         RenderPassDescriptor.Attachment<OptionalDouble> depthAttachment = descriptor.depthAttachment();
@@ -192,26 +202,16 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
         Double depthClear = null;
         if (depthAttachment != null) {
             depthTexture = depthAttachment.textureView();
-            OptionalDouble attachmentClear = depthAttachment.clearValue();
-            depthClear = attachmentClear.isPresent() ? attachmentClear.getAsDouble() : null;
-
             MetalGpuTexture metalDepth = (MetalGpuTexture) depthTexture.texture();
-            Double pendingDepth = pendingDepthClears.get(metalDepth);
-            if (pendingDepth != null && depthClear == null) {
-                if (isFullTextureView(depthTexture)) {
-                    pendingDepthClears.remove(metalDepth);
-                    depthClear = pendingDepth;
-                } else {
-                    flushPendingClear(metalDepth);
-                }
-            } else {
-                pendingDepthClears.remove(metalDepth);
+            if (!fullArea || depthTexture.baseMipLevel() != 0) {
+                flushPendingClear(metalDepth);
             }
+            Double pendingDepth = pendingDepthClears.remove(metalDepth);
+            OptionalDouble attachmentClear = depthAttachment.clearValue();
+            depthClear = attachmentClear.isPresent() ? Double.valueOf(attachmentClear.getAsDouble()) : pendingDepth;
             metalDepth.markContentsDirty();
         }
 
-        assert descriptor.renderArea != null;
-        RenderPass.RenderArea renderArea = descriptor.renderArea;
         MetalRenderPass renderPass = new MetalRenderPass(
                 device,
                 this,
@@ -626,12 +626,6 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
         encoder.waitForFence(fence, MTLRenderStages.VertexAndFragment);
         currentEncoder = encoder;
         texture.recordMaterializedClear(colorClear, depthClear);
-    }
-
-    private static boolean isFullTextureView(final GpuTextureView textureView) {
-        return textureView.baseMipLevel() == 0
-                && textureView.mipLevels() >= textureView.texture().getMipLevels()
-                && textureView.texture().getDepthOrLayers() == 1;
     }
 
     private static boolean isFullTextureRegion(

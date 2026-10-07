@@ -139,7 +139,11 @@ public final class MTLBuiltinPipelines {
             final double viewportWidth,
             final double viewportHeight,
             @Nullable final Vector4fc clearColor,
-            @Nullable final Double clearDepth
+            @Nullable final Double clearDepth,
+            final long x,
+            final long y,
+            final long width,
+            final long height
     ) {
         try (AutoreleasePool _ = AutoreleasePool.push()) {
             MemorySegment sizeTexture = ObjC.isNil(colorTexture) ? depthTexture : colorTexture;
@@ -158,9 +162,11 @@ public final class MTLBuiltinPipelines {
                     ? ensureDepthStencilState(MTLCompareFunction.Always, clearDepth != null)
                     : MemorySegment.NULL;
 
-            long width = MTLTexture.width(sizeTexture);
-            long height = MTLTexture.height(sizeTexture);
-            if (width <= 0 || height <= 0) {
+            long clampedX = Math.max(x, 0L);
+            long clampedY = Math.max(y, 0L);
+            long clampedMaxX = Math.min(x + width, MTLTexture.width(sizeTexture));
+            long clampedMaxY = Math.min(y + height, MTLTexture.height(sizeTexture));
+            if (clampedX >= clampedMaxX || clampedY >= clampedMaxY) {
                 return;
             }
 
@@ -168,7 +174,7 @@ public final class MTLBuiltinPipelines {
                     encoder, pipeline,
                     (long) viewportWidth, (long) viewportHeight,
                     clearColor,
-                    0L, 0L, width, height,
+                    clampedX, clampedY, clampedMaxX - clampedX, clampedMaxY - clampedY,
                     depthState, clearDepth
             );
         }

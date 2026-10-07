@@ -364,7 +364,8 @@ final class MetalRenderPass implements RenderPassBackend {
                 colorTexture.getWidth(0),
                 colorTexture.getHeight(0),
                 clearColor,
-                clearDepth
+                clearDepth,
+                renderArea
         );
         clearColor = null;
         clearDepth = null;
