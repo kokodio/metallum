@@ -33,7 +33,7 @@ public final class CAMetalLayer {
             throw new IllegalStateException("Failed to create CAMetalLayer");
         }
         SET_DEVICE.send(this.handle, device.handle());
-        SET_FRAMEBUFFER_ONLY.send(this.handle, true);
+        SET_FRAMEBUFFER_ONLY.send(this.handle, false);
         SET_OPAQUE.send(this.handle, true);
         SET_CONTENTS_SCALE.send(this.handle, contentsScale);
     }
