@@ -1,8 +1,6 @@
 package com.metallum.render;
 
 import com.metallum.mtl.*;
-import com.metallum.objc.Msg;
-import com.metallum.objc.ObjC;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.textures.GpuTexture;
 import net.fabricmc.api.EnvType;
@@ -10,11 +8,9 @@ import net.fabricmc.api.Environment;
 import org.joml.Vector4fc;
 import org.jspecify.annotations.Nullable;
 
-import java.lang.foreign.MemorySegment;
 
 @Environment(EnvType.CLIENT)
 final class MetalGpuTexture extends GpuTexture {
-    private static final Msg SET_LABEL = Msg.ofVoid("setLabel:", java.lang.foreign.ValueLayout.ADDRESS);
 
     private final MetalDevice device;
     private final MTLPixelFormat mtlPixelFormat;
@@ -25,7 +21,9 @@ final class MetalGpuTexture extends GpuTexture {
     private Double materializedDepthClear;
     private int views = 1;
     @Nullable
-    private MemorySegment nativeHandle;
+    private MTLTexture metalTexture;
+    private final MTLTextureType textureType;
+    private final long sliceCount;
 
     MetalGpuTexture(
             final MetalDevice device,
@@ -41,32 +39,32 @@ final class MetalGpuTexture extends GpuTexture {
         this.device = device;
         this.mtlPixelFormat = MTLPixelFormat.from(format);
 
-        try (MTLTextureDescriptor descriptor = MTLTextureDescriptor.create()) {
-            descriptor.pixelFormat(this.mtlPixelFormat);
-            descriptor.width(width);
-            descriptor.height(height);
-            if ((usage & GpuTexture.USAGE_CUBEMAP_COMPATIBLE) != 0) {
-                if (depthOrLayers > 6) {
-                    descriptor.textureType(MTLTextureType.TypeCubeArray);
-                    descriptor.arrayLength(depthOrLayers / 6);
-                } else {
-                    descriptor.textureType(MTLTextureType.TypeCube);
-                    descriptor.arrayLength(1);
-                }
-            } else if (depthOrLayers > 1) {
-                descriptor.textureType(MTLTextureType.Type2DArray);
-                descriptor.arrayLength(depthOrLayers);
-            }
-            descriptor.mipmapLevelCount(Math.max(mipLevels, 1));
-            descriptor.usage(toMtlTextureUsage(usage));
-            descriptor.storageMode(MTLStorageMode.Private);
-            descriptor.hazardTrackingMode(MTLHazardTrackingMode.Untracked);
-            this.nativeHandle = device.metalDevice().newTexture(descriptor);
+        MTLTextureDescriptor descriptor = MTLTextureDescriptor.alloc().init();
+        descriptor.setPixelFormat(this.mtlPixelFormat);
+        descriptor.setWidth(width);
+        descriptor.setHeight(height);
+        if ((usage & GpuTexture.USAGE_CUBEMAP_COMPATIBLE) != 0) {
+            long cubes = depthOrLayers > 6 ? depthOrLayers / 6 : 1;
+            this.textureType = depthOrLayers > 6 ? MTLTextureType.TypeCubeArray : MTLTextureType.TypeCube;
+            this.sliceCount = cubes * 6;
+            descriptor.setArrayLength(cubes);
+        } else if (depthOrLayers > 1) {
+            this.textureType = MTLTextureType.Type2DArray;
+            this.sliceCount = depthOrLayers;
+            descriptor.setArrayLength(depthOrLayers);
+        } else {
+            this.textureType = MTLTextureType.Type2D;
+            this.sliceCount = 1;
         }
-        if (label != null) {
-            MemorySegment nsLabel = ObjC.nsString(label);
-            SET_LABEL.send(this.nativeHandle, nsLabel);
-            ObjC.release(nsLabel);
+        descriptor.setTextureType(this.textureType);
+        descriptor.setMipmapLevelCount(Math.max(mipLevels, 1));
+        descriptor.setUsage(toMtlTextureUsage(usage));
+        descriptor.setStorageMode(MTLStorageMode.Private);
+        descriptor.setHazardTrackingMode(MTLHazardTrackingMode.Untracked);
+        this.metalTexture = device.metalDevice().newTexture(descriptor);
+        descriptor.release();
+        if (!label.isEmpty()) {
+            this.metalTexture.setLabel(label);
         }
     }
 
@@ -93,15 +91,23 @@ final class MetalGpuTexture extends GpuTexture {
         this.materializedDepthClear = null;
     }
 
-    MemorySegment nativeHandle() {
-        if (this.nativeHandle == null) {
+    MTLTexture metalTexture() {
+        if (this.metalTexture == null) {
             throw new IllegalStateException("Native Metal texture is closed");
         }
-        return this.nativeHandle;
+        return this.metalTexture;
     }
 
-    void queueNativeRelease(final MemorySegment handle) {
-        this.device.queueResourceRelease(handle);
+    MTLTextureType textureType() {
+        return this.textureType;
+    }
+
+    long sliceCount() {
+        return this.sliceCount;
+    }
+
+    void queueNativeRelease(final MTLTexture texture) {
+        this.device.queueResourceRelease(texture);
     }
 
     void addView() {
@@ -113,19 +119,15 @@ final class MetalGpuTexture extends GpuTexture {
         if (this.views < 0) {
             throw new IllegalStateException("Too many views removed from texture");
         }
-        if (this.closed && this.views == 0 && this.nativeHandle != null) {
-            MemorySegment handle = this.nativeHandle;
-            this.nativeHandle = null;
-            this.device.queueResourceRelease(handle);
+        if (this.closed && this.views == 0 && this.metalTexture != null) {
+            MTLTexture released = this.metalTexture;
+            this.metalTexture = null;
+            this.device.queueResourceRelease(released);
         }
     }
 
     MTLPixelFormat mtlPixelFormat() {
         return this.mtlPixelFormat;
-    }
-
-    MTLPixelFormat mtlStencilPixelFormat() {
-        return this.mtlPixelFormat.hasStencil() ? this.mtlPixelFormat : MTLPixelFormat.Invalid;
     }
 
     @Override

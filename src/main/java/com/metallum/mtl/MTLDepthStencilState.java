@@ -7,8 +7,8 @@ import net.fabricmc.api.Environment;
 import java.lang.foreign.MemorySegment;
 
 @Environment(EnvType.CLIENT)
-public final class MTLFence extends NSObject {
-    public MTLFence(final MemorySegment handle) {
+public final class MTLDepthStencilState extends NSObject {
+    MTLDepthStencilState(final MemorySegment handle) {
         super(handle);
     }
 }

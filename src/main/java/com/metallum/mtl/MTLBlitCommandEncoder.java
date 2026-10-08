@@ -27,7 +27,7 @@ public final class MTLBlitCommandEncoder extends MTLCommandEncoder {
         super(handle);
     }
 
-    public void copyFromBufferToBuffer(
+    public void copyFromBuffer(
             final MTLBuffer sourceBuffer,
             final long sourceOffset,
             final MTLBuffer destinationBuffer,
@@ -37,18 +37,16 @@ public final class MTLBlitCommandEncoder extends MTLCommandEncoder {
         COPY_BUFFER_TO_BUFFER.send(handle(), sourceBuffer.handle(), sourceOffset, destinationBuffer.handle(), destinationOffset, size);
     }
 
-    public void copyFromBufferToTexture(
+    public void copyFromBuffer(
             final MTLBuffer sourceBuffer,
             final long sourceOffset,
             final long sourceBytesPerRow,
             final long sourceBytesPerImage,
-            final long width,
-            final long height,
-            final MemorySegment texture,
+            final MTLSize sourceSize,
+            final MTLTexture destinationTexture,
             final long destinationSlice,
             final long destinationLevel,
-            final long destinationX,
-            final long destinationY
+            final MTLOrigin destinationOrigin
     ) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             COPY_BUFFER_TO_TEXTURE.send(
@@ -57,53 +55,48 @@ public final class MTLBlitCommandEncoder extends MTLCommandEncoder {
                     sourceOffset,
                     sourceBytesPerRow,
                     sourceBytesPerImage,
-                    MTLSize.on(stack, width, height, 1),
-                    texture,
+                    sourceSize.on(stack),
+                    destinationTexture.handle(),
                     destinationSlice,
                     destinationLevel,
-                    MTLOrigin.on(stack, destinationX, destinationY, 0)
+                    destinationOrigin.on(stack)
             );
         }
     }
 
-    public void copyFromTextureToTexture(
-            final MemorySegment sourceTexture,
+    public void copyFromTexture(
+            final MTLTexture sourceTexture,
             final long sourceSlice,
             final long sourceLevel,
-            final long sourceX,
-            final long sourceY,
-            final long width,
-            final long height,
-            final MemorySegment destinationTexture,
+            final MTLOrigin sourceOrigin,
+            final MTLSize sourceSize,
+            final MTLTexture destinationTexture,
             final long destinationSlice,
             final long destinationLevel,
-            final long destinationX,
-            final long destinationY
+            final MTLOrigin destinationOrigin
     ) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             COPY_TEXTURE_TO_TEXTURE.send(
                     handle(),
-                    sourceTexture,
+                    sourceTexture.handle(),
                     sourceSlice,
                     sourceLevel,
-                    MTLOrigin.on(stack, sourceX, sourceY, 0),
-                    MTLSize.on(stack, width, height, 1),
-                    destinationTexture,
+                    sourceOrigin.on(stack),
+                    sourceSize.on(stack),
+                    destinationTexture.handle(),
                     destinationSlice,
                     destinationLevel,
-                    MTLOrigin.on(stack, destinationX, destinationY, 0)
+                    destinationOrigin.on(stack)
             );
         }
     }
 
-    public void copyFromTextureToBuffer(
-            final MemorySegment sourceTexture,
+    public void copyFromTexture(
+            final MTLTexture sourceTexture,
             final long sourceSlice,
             final long sourceLevel,
-            final long sourceX,
-            final long sourceY,
-            final long width,
-            final long height,
+            final MTLOrigin sourceOrigin,
+            final MTLSize sourceSize,
             final MTLBuffer destinationBuffer,
             final long destinationOffset,
             final long destinationBytesPerRow,
@@ -112,11 +105,11 @@ public final class MTLBlitCommandEncoder extends MTLCommandEncoder {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             COPY_TEXTURE_TO_BUFFER.send(
                     handle(),
-                    sourceTexture,
+                    sourceTexture.handle(),
                     sourceSlice,
                     sourceLevel,
-                    MTLOrigin.on(stack, sourceX, sourceY, 0),
-                    MTLSize.on(stack, width, height, 1),
+                    sourceOrigin.on(stack),
+                    sourceSize.on(stack),
                     destinationBuffer.handle(),
                     destinationOffset,
                     destinationBytesPerRow,

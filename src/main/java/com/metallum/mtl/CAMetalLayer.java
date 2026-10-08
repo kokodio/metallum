@@ -1,6 +1,7 @@
 package com.metallum.mtl;
 
 import com.metallum.objc.Msg;
+import com.metallum.objc.NSObject;
 import com.metallum.objc.ObjC;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -11,7 +12,7 @@ import java.lang.foreign.MemorySegment;
 import static java.lang.foreign.ValueLayout.*;
 
 @Environment(EnvType.CLIENT)
-public final class CAMetalLayer {
+public final class CAMetalLayer extends NSObject {
     private static final MemorySegment CLS = ObjC.clazz("CAMetalLayer");
     private static final Msg NEW = Msg.of("new", ADDRESS);
     private static final Msg SET_DEVICE = Msg.ofVoid("setDevice:", ADDRESS);
@@ -26,18 +27,13 @@ public final class CAMetalLayer {
     private static final Msg SET_DISPLAY_SYNC_ENABLED = Msg.ofVoid("setDisplaySyncEnabled:", JAVA_BOOLEAN);
     private static final Msg NEXT_DRAWABLE = Msg.of("nextDrawable", true, ADDRESS);
 
-    private final MemorySegment handle;
-
     public CAMetalLayer() {
-        this.handle = NEW.sendPtr(CLS);
+        super(NEW.sendPtr(CLS));
         if (ObjC.isNil(this.handle)) {
             throw new IllegalStateException("Failed to create CAMetalLayer");
         }
     }
 
-    public MemorySegment handle() {
-        return this.handle;
-    }
 
     public void setDevice(final MTLDevice device) {
         SET_DEVICE.send(this.handle, device.handle());
@@ -80,7 +76,7 @@ public final class CAMetalLayer {
     }
 
     @Nullable
-    CAMetalDrawable nextDrawable() {
+    public CAMetalDrawable nextDrawable() {
         MemorySegment drawable = NEXT_DRAWABLE.sendPtr(this.handle);
         return ObjC.isNil(drawable) ? null : new CAMetalDrawable(drawable);
     }

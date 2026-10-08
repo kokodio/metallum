@@ -21,28 +21,36 @@ class MetalGpuBuffer extends GpuBuffer {
     private final MetalDevice device;
     private final boolean cpuAccessible;
     private final boolean dynamic;
+    private final MTLStorageMode storageMode;
     private final long resourceOptions;
     private final long allocationSize;
+    @Nullable
+    private final String label;
     @Nullable
     private MTLBuffer nativeBuffer;
     @Nullable
     private ByteBuffer storage;
     private boolean closed;
 
-    MetalGpuBuffer(final MetalDevice device, @GpuBuffer.Usage final int usage, final long size) {
+    MetalGpuBuffer(final MetalDevice device, @GpuBuffer.Usage final int usage, final long size, @Nullable final String label) {
         super(usage, size);
         this.device = device;
+        this.label = label;
 
         this.dynamic = isDynamic(usage);
         this.cpuAccessible = isCpuAccessible(usage) || this.dynamic;
-        this.resourceOptions = toMtlResourceOptions(usage);
+        this.storageMode = this.cpuAccessible ? MTLStorageMode.Shared : MTLStorageMode.Private;
+        this.resourceOptions = MTLResourceOptions.of(this.storageMode, MTLHazardTrackingMode.Untracked);
         this.allocationSize = (size + 15L) & ~15L;
         this.nativeBuffer = device.metalDevice().newBuffer(this.allocationSize, this.resourceOptions);
+        if (label != null) {
+            this.nativeBuffer.setLabel(label);
+        }
 
         if (this.cpuAccessible) {
             MemorySegment contents = this.nativeBuffer.contents();
             if (ObjC.isNil(contents)) {
-                ObjC.release(this.nativeBuffer.handle());
+                this.nativeBuffer.release();
                 this.nativeBuffer = null;
                 throw new IllegalStateException("MTLBuffer.contents returned null");
             }
@@ -53,14 +61,16 @@ class MetalGpuBuffer extends GpuBuffer {
         }
     }
 
-    MetalGpuBuffer(final MetalDevice device, @GpuBuffer.Usage final int usage, final long size, final @Nullable MTLBuffer wrappedBuffer) {
-        super(usage, size);
-        this.device = device;
-        this.cpuAccessible = false;
+    MetalGpuBuffer(@GpuBuffer.Usage final int usage, final MetalGpuBuffer block) {
+        super(usage, block.size());
+        this.device = block.device;
+        this.label = block.label;
         this.dynamic = false;
-        this.resourceOptions = 0L;
-        this.allocationSize = size;
-        this.nativeBuffer = wrappedBuffer;
+        this.cpuAccessible = false;
+        this.storageMode = block.storageMode;
+        this.resourceOptions = block.resourceOptions;
+        this.allocationSize = block.allocationSize;
+        this.nativeBuffer = block.nativeBuffer;
         this.storage = null;
     }
 
@@ -83,10 +93,6 @@ class MetalGpuBuffer extends GpuBuffer {
         return this.nativeBuffer;
     }
 
-    MemorySegment nativeHandle() {
-        return metalBuffer().handle();
-    }
-
     boolean isDynamic() {
         return this.dynamic;
     }
@@ -107,6 +113,10 @@ class MetalGpuBuffer extends GpuBuffer {
         return this.resourceOptions;
     }
 
+    MTLStorageMode storageMode() {
+        return this.storageMode;
+    }
+
     ByteBuffer currentStorage() {
         if (this.storage == null) {
             throw new IllegalStateException("Buffer is not CPU-accessible");
@@ -115,6 +125,9 @@ class MetalGpuBuffer extends GpuBuffer {
     }
 
     void swapBacking(final MTLBuffer buffer, final ByteBuffer storage) {
+        if (this.label != null) {
+            buffer.setLabel(this.label);
+        }
         this.nativeBuffer = buffer;
         this.storage = storage;
     }
@@ -132,9 +145,9 @@ class MetalGpuBuffer extends GpuBuffer {
         this.closed = true;
         this.storage = null;
         if (this.nativeBuffer != null) {
-            MemorySegment handle = this.nativeBuffer.handle();
+            MTLBuffer released = this.nativeBuffer;
             this.nativeBuffer = null;
-            this.device.queueResourceRelease(handle);
+            this.device.queueResourceRelease(released);
         }
     }
 
@@ -170,10 +183,5 @@ class MetalGpuBuffer extends GpuBuffer {
 
     private static boolean isDynamic(@GpuBuffer.Usage final int usage) {
         return (usage & GpuBuffer.USAGE_UNIFORM) != 0 && (usage & GpuBuffer.USAGE_COPY_DST) != 0;
-    }
-
-    private static long toMtlResourceOptions(@GpuBuffer.Usage final int usage) {
-        MTLStorageMode storageMode = isCpuAccessible(usage) || isDynamic(usage) ? MTLStorageMode.Shared : MTLStorageMode.Private;
-        return MTLResourceOptions.of(storageMode, MTLHazardTrackingMode.Untracked);
     }
 }

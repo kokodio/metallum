@@ -1,8 +1,8 @@
 package com.metallum.render;
 
+import com.metallum.Metallum;
 import com.metallum.mtl.*;
-import com.metallum.objc.Cocoa;
-import com.metallum.objc.ObjC;
+import com.metallum.objc.NSObject;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
@@ -23,7 +23,6 @@ import net.minecraft.resources.Identifier;
 import org.jspecify.annotations.NonNull;
 import org.jspecify.annotations.Nullable;
 
-import java.lang.foreign.MemorySegment;
 import java.nio.ByteBuffer;
 import java.util.*;
 import java.util.function.Supplier;
@@ -33,37 +32,31 @@ import java.util.regex.Pattern;
 final class MetalDevice implements GpuDeviceBackend {
     private static final Pattern BLOCK_COMMENTS = Pattern.compile("(?s)/\\*.*?\\*/");
     private static final Pattern LINE_COMMENTS = Pattern.compile("(?m)//[^\\n]*");
-    private final MemorySegment metalDeviceHandle;
     private final MTLDevice metalDevice;
     private final CAMetalLayer metalLayer;
-    private final Cocoa cocoa;
     private final GpuDebugOptions debugOptions;
     private final MetalCommandEncoder commandEncoder;
     private final DeviceInfo deviceInfo;
     public final MTLCommandQueue commandQueue;
     private final Map<RenderPipeline, MetalCompiledRenderPipeline> compiledPipelines = new IdentityHashMap<>();
     private final Map<ShaderCompilationKey, IntermediaryShaderModule> shaderCache = new HashMap<>();
-    private final Map<MslFunctionKey, MemorySegment> functionCache = new HashMap<>();
-    private final Map<Long, MemorySegment> depthStencilStates = new HashMap<>();
+    private final Map<MslFunctionKey, MTLFunction> functionCache = new HashMap<>();
+    private final Map<Long, MTLDepthStencilState> depthStencilStates = new HashMap<>();
     private final ShaderSource defaultShaderSource;
 
     MetalDevice(
             final ShaderSource defaultShaderSource,
             final GpuDebugOptions debugOptions,
-            final MemorySegment metalDeviceHandle,
+            final MTLDevice metalDevice,
             final CAMetalLayer metalLayer,
-            final String deviceName,
-            final Cocoa cocoa
+            final String deviceName
     ) {
         this.defaultShaderSource = defaultShaderSource;
         this.debugOptions = debugOptions;
-        this.metalDeviceHandle = metalDeviceHandle;
-        this.metalDevice = new MTLDevice(metalDeviceHandle);
+        this.metalDevice = metalDevice;
         this.metalLayer = metalLayer;
-        this.cocoa = cocoa;
-        MTLCommandQueue.setDebugLabelsEnabled(this.useLabels());
         this.commandQueue = this.metalDevice.newCommandQueue();
-        MTLBuiltinPipelines.init(this.metalDevice);
+        MetalUtilities.init(this.metalDevice);
         this.commandEncoder = new MetalCommandEncoder(this);
         this.deviceInfo = buildDeviceInfo(deviceName);
     }
@@ -113,7 +106,7 @@ final class MetalDevice implements GpuDeviceBackend {
             final int depthOrLayers,
             final int mipLevels
     ) {
-        return new MetalGpuTexture(this, usage, label == null ? "" : label, format, width, height, depthOrLayers, mipLevels);
+        return new MetalGpuTexture(this, usage, this.useLabels() && label != null ? label : "", format, width, height, depthOrLayers, mipLevels);
     }
 
     @Override
@@ -128,7 +121,7 @@ final class MetalDevice implements GpuDeviceBackend {
 
     @Override
     public @NonNull GpuBuffer createBuffer(@Nullable final Supplier<String> label, @GpuBuffer.Usage final int usage, final long size) {
-        return new MetalGpuBuffer(this, usage, size);
+        return new MetalGpuBuffer(this, usage, size, this.resolveDebugLabel(label));
     }
 
     @Override
@@ -169,11 +162,7 @@ final class MetalDevice implements GpuDeviceBackend {
         this.compiledPipelines.clear();
         this.shaderCache.values().forEach(IntermediaryShaderModule::close);
         this.shaderCache.clear();
-        for (MemorySegment function : this.functionCache.values()) {
-            if (!ObjC.isNil(function)) {
-                ObjC.release(function);
-            }
-        }
+        this.functionCache.values().forEach(MTLFunction::release);
         this.functionCache.clear();
     }
 
@@ -182,17 +171,13 @@ final class MetalDevice implements GpuDeviceBackend {
         this.waitForSubmittedGpuWork();
         this.commandEncoder.close();
         this.clearPipelineCache();
-        try {
-            this.cocoa.clearViewLayer();
-        } catch (Throwable ignored) {
-        }
-        MTLBuiltinPipelines.close();
+        MetalUtilities.close();
         this.commandQueue.close();
-        for (MemorySegment state : depthStencilStates.values()) {
-            ObjC.release(state);
+        for (MTLDepthStencilState state : depthStencilStates.values()) {
+            state.release();
         }
         depthStencilStates.clear();
-        ObjC.release(this.metalDeviceHandle);
+        this.metalDevice.release();
     }
 
     @Override
@@ -214,27 +199,27 @@ final class MetalDevice implements GpuDeviceBackend {
         return this.metalDevice;
     }
 
-    MemorySegment depthStencilState(final MTLCompareFunction compareFunction, final boolean writeDepth) {
+    MTLDepthStencilState depthStencilState(final MTLCompareFunction compareFunction, final boolean writeDepth) {
         long key = (compareFunction.value << 1) | (writeDepth ? 1L : 0L);
-        MemorySegment cached = depthStencilStates.get(key);
+        MTLDepthStencilState cached = depthStencilStates.get(key);
         if (cached != null) {
             return cached;
         }
-        try (MTLDepthStencilDescriptor descriptor = MTLDepthStencilDescriptor.create()) {
-            descriptor.depthCompareFunction(compareFunction);
-            descriptor.depthWriteEnabled(writeDepth);
-            MemorySegment state = metalDevice.newDepthStencilState(descriptor);
-            depthStencilStates.put(key, state);
-            return state;
-        }
+        MTLDepthStencilDescriptor descriptor = MTLDepthStencilDescriptor.alloc().init();
+        descriptor.setDepthCompareFunction(compareFunction);
+        descriptor.setDepthWriteEnabled(writeDepth);
+        MTLDepthStencilState state = metalDevice.newDepthStencilState(descriptor);
+        depthStencilStates.put(key, state);
+        descriptor.release();
+        return state;
     }
 
     void waitForSubmittedGpuWork() {
         this.commandEncoder.waitForSubmittedGpuWork();
     }
 
-    void queueResourceRelease(final MemorySegment handle) {
-        this.commandEncoder.queueForDestroy(() -> ObjC.release(handle));
+    void queueResourceRelease(final NSObject object) {
+        this.commandEncoder.queueForDestroy(object::release);
     }
 
     MetalCompiledRenderPipeline getOrCompilePipeline(final RenderPipeline pipeline) {
@@ -263,11 +248,26 @@ final class MetalDevice implements GpuDeviceBackend {
         return GlslPreprocessor.injectDefines(stripped, defines);
     }
 
-    MemorySegment getOrCompileFunction(final String msl, final String entryPoint) {
-        return this.functionCache.computeIfAbsent(
-                new MslFunctionKey(msl, entryPoint),
-                key -> this.metalDevice.newFunction(key.msl(), key.entryPoint())
-        );
+    @Nullable
+    MTLFunction getOrCompileFunction(final String msl, final String entryPoint, final String name) {
+        return this.functionCache.computeIfAbsent(new MslFunctionKey(msl, entryPoint), key -> this.compileFunction(key, name));
+    }
+
+    @Nullable
+    private MTLFunction compileFunction(final MslFunctionKey key, final String name) {
+        MTLLibrary library = this.metalDevice.newLibrary(key.msl());
+        if (library == null) {
+            return null;
+        }
+
+        MTLFunction function = library.newFunction(key.entryPoint());
+        library.release();
+        if (function == null) {
+            Metallum.LOGGER.error("[metallum] Failed to resolve MSL entry point '{}'", key.entryPoint());
+        } else if (this.useLabels()) {
+            function.setLabel(name);
+        }
+        return function;
     }
 
     private record ShaderCompilationKey(Identifier id, ShaderType type, ShaderDefines defines) {
@@ -290,7 +290,7 @@ final class MetalDevice implements GpuDeviceBackend {
                 "Metal",
                 1.0F,
                 new DeviceLimits(16, 256, 16384, maxMemoryAllocationSize, 0, 1),
-                new DeviceFeatures(false, false, true, true, true, false, true),
+                new DeviceFeatures(false, false, false, true, true, false, true),
                 extensions,
                 new HintsAndWorkarounds(false, false),
                 type

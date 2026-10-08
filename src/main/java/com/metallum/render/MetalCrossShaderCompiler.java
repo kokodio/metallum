@@ -53,7 +53,7 @@ final class MetalCrossShaderCompiler {
             addToBindGroup(layoutEntries, fragmentSpirv, pipeline);
             List<String> vertexOutputs = extractVariableNames(vertexSpirv.outputs());
 
-            vertexSpirv.rebind(tolerateUnprovidedInputs(MetalPipelineSupport.vertexAttributeNames(pipeline), vertexSpirv.inputs()), layoutEntries);
+            vertexSpirv.rebind(tolerateUnprovidedInputs(MetalUtilities.vertexAttributeNames(pipeline), vertexSpirv.inputs()), layoutEntries);
             MslShader vertexMsl = spirvToMsl(vertexSpirv.spirv(), layoutEntries.size(), vertexAttributeFormats(pipeline), true);
 
             boolean enableFragDepth = pipeline.getDepthStencilState() != null;

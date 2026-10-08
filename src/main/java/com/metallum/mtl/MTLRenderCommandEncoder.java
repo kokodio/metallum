@@ -1,12 +1,8 @@
 package com.metallum.mtl;
 
 import com.metallum.objc.Msg;
-import com.metallum.objc.ObjC;
-import com.mojang.blaze3d.systems.RenderPass;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
-import org.joml.Vector4fc;
-import org.jspecify.annotations.Nullable;
 import org.lwjgl.system.MemoryStack;
 
 import java.lang.foreign.MemorySegment;
@@ -46,12 +42,12 @@ public final class MTLRenderCommandEncoder extends MTLCommandEncoder {
         super(handle);
     }
 
-    public void setRenderPipelineState(final MemorySegment pipeline) {
-        SET_RENDER_PIPELINE_STATE.send(handle(), ObjC.orNil(pipeline));
+    public void setRenderPipelineState(final MTLRenderPipelineState pipelineState) {
+        SET_RENDER_PIPELINE_STATE.send(handle(), pipelineState.handle());
     }
 
-    public void setDepthStencilState(final MemorySegment depthStencilState) {
-        SET_DEPTH_STENCIL_STATE.send(handle(), ObjC.orNil(depthStencilState));
+    public void setDepthStencilState(final MTLDepthStencilState depthStencilState) {
+        SET_DEPTH_STENCIL_STATE.send(handle(), depthStencilState.handle());
     }
 
     public void setDepthBias(final float depthBias, final float slopeScale, final float clamp) {
@@ -86,20 +82,20 @@ public final class MTLRenderCommandEncoder extends MTLCommandEncoder {
         SET_FRAGMENT_BUFFER_OFFSET.send(handle(), offset, index);
     }
 
-    public void setVertexTexture(final MemorySegment texture, final long index) {
-        SET_VERTEX_TEXTURE.send(handle(), ObjC.orNil(texture), index);
+    public void setVertexTexture(final MTLTexture texture, final long index) {
+        SET_VERTEX_TEXTURE.send(handle(), texture.handle(), index);
     }
 
-    public void setFragmentTexture(final MemorySegment texture, final long index) {
-        SET_FRAGMENT_TEXTURE.send(handle(), ObjC.orNil(texture), index);
+    public void setFragmentTexture(final MTLTexture texture, final long index) {
+        SET_FRAGMENT_TEXTURE.send(handle(), texture.handle(), index);
     }
 
-    public void setVertexSamplerState(final MemorySegment sampler, final long index) {
-        SET_VERTEX_SAMPLER.send(handle(), ObjC.orNil(sampler), index);
+    public void setVertexSamplerState(final MTLSamplerState sampler, final long index) {
+        SET_VERTEX_SAMPLER.send(handle(), sampler.handle(), index);
     }
 
-    public void setFragmentSamplerState(final MemorySegment sampler, final long index) {
-        SET_FRAGMENT_SAMPLER.send(handle(), ObjC.orNil(sampler), index);
+    public void setFragmentSamplerState(final MTLSamplerState sampler, final long index) {
+        SET_FRAGMENT_SAMPLER.send(handle(), sampler.handle(), index);
     }
 
     public void setScissorRect(final long x, final long y, final long width, final long height) {
@@ -125,30 +121,6 @@ public final class MTLRenderCommandEncoder extends MTLCommandEncoder {
         SET_VERTEX_BYTES.send(handle(), bytes, length, index);
     }
 
-    public void clearDraw(
-            final MemorySegment colorTexture,
-            final MemorySegment depthTexture,
-            final double viewportWidth,
-            final double viewportHeight,
-            @Nullable final Vector4fc clearColor,
-            @Nullable final Double clearDepth,
-            final RenderPass.RenderArea area
-    ) {
-        MTLBuiltinPipelines.clearDraw(
-                this,
-                colorTexture,
-                depthTexture,
-                viewportWidth,
-                viewportHeight,
-                clearColor,
-                clearDepth,
-                area.x(),
-                area.y(),
-                area.width(),
-                area.height()
-        );
-    }
-
     public void drawPrimitives(final MTLPrimitiveType primitiveType, final int firstVertex, final int vertexCount, final int instanceCount, final int baseInstance) {
         DRAW_PRIMITIVES.send(handle(), primitiveType.value, firstVertex, vertexCount, instanceCount, baseInstance);
     }
@@ -157,11 +129,11 @@ public final class MTLRenderCommandEncoder extends MTLCommandEncoder {
         DRAW_INDEXED.send(handle(), primitiveType.value, indexCount, indexType.value, indexBuffer.handle(), offset, instanceCount, baseVertex, baseInstance);
     }
 
-    public void drawIndexedPrimitivesIndirect(final MTLPrimitiveType primitiveType, final MTLIndexType indexType, final MTLBuffer indexBuffer, final MTLBuffer indirectBuffer, final long indirectBufferOffset) {
-        DRAW_INDEXED_INDIRECT.send(handle(), primitiveType.value, indexType.value, indexBuffer.handle(), 0L, indirectBuffer.handle(), indirectBufferOffset);
+    public void drawIndexedPrimitives(final MTLPrimitiveType primitiveType, final MTLIndexType indexType, final MTLBuffer indexBuffer, final long indexBufferOffset, final MTLBuffer indirectBuffer, final long indirectBufferOffset) {
+        DRAW_INDEXED_INDIRECT.send(handle(), primitiveType.value, indexType.value, indexBuffer.handle(), indexBufferOffset, indirectBuffer.handle(), indirectBufferOffset);
     }
 
-    public void drawPrimitivesIndirect(final MTLPrimitiveType primitiveType, final MTLBuffer indirectBuffer, final long indirectBufferOffset) {
+    public void drawPrimitives(final MTLPrimitiveType primitiveType, final MTLBuffer indirectBuffer, final long indirectBufferOffset) {
         DRAW_INDIRECT.send(handle(), primitiveType.value, indirectBuffer.handle(), indirectBufferOffset);
     }
 

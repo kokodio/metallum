@@ -1,9 +1,6 @@
 package com.metallum.render;
 
-import com.metallum.mtl.MTLSamplerAddressMode;
-import com.metallum.mtl.MTLSamplerDescriptor;
-import com.metallum.mtl.MTLSamplerMinMagFilter;
-import com.metallum.mtl.MTLSamplerMipFilter;
+import com.metallum.mtl.*;
 import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
@@ -11,13 +8,12 @@ import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.NonNull;
 
-import java.lang.foreign.MemorySegment;
 import java.util.OptionalDouble;
 
 @Environment(EnvType.CLIENT)
 final class MetalGpuSampler extends GpuSampler {
     private final MetalDevice device;
-    private final MemorySegment nativeHandle;
+    private final MTLSamplerState metalSampler;
     private final AddressMode addressModeU;
     private final AddressMode addressModeV;
     private final FilterMode minFilter;
@@ -36,18 +32,18 @@ final class MetalGpuSampler extends GpuSampler {
             final OptionalDouble maxLod
     ) {
         this.device = device;
-        try (MTLSamplerDescriptor descriptor = MTLSamplerDescriptor.create()) {
-            descriptor.minFilter(MTLSamplerMinMagFilter.from(minFilter));
-            descriptor.magFilter(MTLSamplerMinMagFilter.from(magFilter));
-            descriptor.mipFilter(toMtlMipFilter(maxLod));
-            descriptor.sAddressMode(MTLSamplerAddressMode.from(addressModeU));
-            descriptor.tAddressMode(MTLSamplerAddressMode.from(addressModeV));
-            descriptor.maxAnisotropy(Math.max(1, maxAnisotropy));
-            descriptor.lodMinClamp(0.0f);
-            double lodMaxClamp = toMtlMaxLodClamp(maxLod);
-            descriptor.lodMaxClamp(lodMaxClamp >= 0.0 && Double.isFinite(lodMaxClamp) ? (float) lodMaxClamp : Float.MAX_VALUE);
-            this.nativeHandle = device.metalDevice().newSamplerState(descriptor);
-        }
+        MTLSamplerDescriptor descriptor = MTLSamplerDescriptor.alloc().init();
+        descriptor.setMinFilter(MTLSamplerMinMagFilter.from(minFilter));
+        descriptor.setMagFilter(MTLSamplerMinMagFilter.from(magFilter));
+        descriptor.setMipFilter(toMtlMipFilter(maxLod));
+        descriptor.setSAddressMode(MTLSamplerAddressMode.from(addressModeU));
+        descriptor.setTAddressMode(MTLSamplerAddressMode.from(addressModeV));
+        descriptor.setMaxAnisotropy(Math.max(1, maxAnisotropy));
+        descriptor.setLodMinClamp(0.0f);
+        double lodMaxClamp = toMtlMaxLodClamp(maxLod);
+        descriptor.setLodMaxClamp(lodMaxClamp >= 0.0 && Double.isFinite(lodMaxClamp) ? (float) lodMaxClamp : Float.MAX_VALUE);
+        this.metalSampler = device.metalDevice().newSamplerState(descriptor);
+        descriptor.release();
         this.addressModeU = addressModeU;
         this.addressModeV = addressModeV;
         this.minFilter = minFilter;
@@ -92,15 +88,15 @@ final class MetalGpuSampler extends GpuSampler {
             return;
         }
         this.closed = true;
-        this.device.queueResourceRelease(this.nativeHandle);
+        this.device.queueResourceRelease(this.metalSampler);
     }
 
     boolean isClosed() {
         return this.closed;
     }
 
-    MemorySegment nativeHandle() {
-        return this.nativeHandle;
+    MTLSamplerState metalSampler() {
+        return this.metalSampler;
     }
 
     private static MTLSamplerMipFilter toMtlMipFilter(final OptionalDouble maxLod) {

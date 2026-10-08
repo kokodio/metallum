@@ -2,10 +2,8 @@ package com.metallum.render;
 
 import com.metallum.Metallum;
 import com.metallum.MetallumConfig;
-import com.metallum.mtl.CAMetalLayer;
-import com.metallum.mtl.CGColorSpace;
-import com.metallum.mtl.MTLDevice;
-import com.metallum.objc.Cocoa;
+import com.metallum.mtl.*;
+import com.metallum.objc.ObjC;
 import com.mojang.blaze3d.GLFWErrorCapture;
 import com.mojang.blaze3d.shaders.GpuDebugOptions;
 import com.mojang.blaze3d.shaders.ShaderSource;
@@ -41,7 +39,7 @@ public class MetalBackend implements GpuBackend {
     public @NonNull GpuDevice createDevice(
             final long window, final @NonNull ShaderSource defaultShaderSource, final @NonNull GpuDebugOptions debugOptions, final @NonNull Runnable criticalShaderLoader
     ) throws BackendCreationException {
-        MTLDevice metalDevice = MTLDevice.createSystemDefault();
+        MTLDevice metalDevice = MTLDevice.createSystemDefaultDevice();
         if (metalDevice == null) {
             throw new BackendCreationException("MTLCreateSystemDefaultDevice returned null", BackendCreationException.Reason.OTHER);
         }
@@ -49,14 +47,13 @@ public class MetalBackend implements GpuBackend {
         String deviceName = metalDevice.name();
         if (deviceName.isBlank()) deviceName = "<unknown Metal device>";
 
-        Cocoa cocoa;
-        try {
-            cocoa = new Cocoa(
-                    MemorySegment.ofAddress(GLFWNativeCocoa.glfwGetCocoaWindow(window)),
-                    MemorySegment.ofAddress(GLFWNativeCocoa.glfwGetCocoaView(window))
-            );
-        } catch (IllegalStateException e) {
-            throw new BackendCreationException(e.getMessage(), BackendCreationException.Reason.GLFW_ERROR);
+        NSWindow nsWindow = new NSWindow(MemorySegment.ofAddress(GLFWNativeCocoa.glfwGetCocoaWindow(window)));
+        if (ObjC.isNil(nsWindow.handle())) {
+            throw new BackendCreationException("NSWindow handle is null", BackendCreationException.Reason.GLFW_ERROR);
+        }
+        NSView nsView = new NSView(MemorySegment.ofAddress(GLFWNativeCocoa.glfwGetCocoaView(window)));
+        if (ObjC.isNil(nsView.handle())) {
+            throw new BackendCreationException("NSView handle is null", BackendCreationException.Reason.GLFW_ERROR);
         }
 
         CAMetalLayer metalLayer;
@@ -65,7 +62,8 @@ public class MetalBackend implements GpuBackend {
             metalLayer.setDevice(metalDevice);
             metalLayer.setFramebufferOnly(false);
             metalLayer.setOpaque(true);
-            metalLayer.setContentsScale(cocoa.backingScaleFactor());
+            double backingScaleFactor = nsWindow.backingScaleFactor();
+            metalLayer.setContentsScale(backingScaleFactor > 0.0 ? backingScaleFactor : 1.0);
             try (CGColorSpace colorspace = CGColorSpace.createWithName(MetallumConfig.INSTANCE.displayP3 ? CGColorSpace.kCGColorSpaceDisplayP3 : CGColorSpace.kCGColorSpaceSRGB)) {
                 metalLayer.setColorspace(colorspace);
             }
@@ -73,12 +71,13 @@ public class MetalBackend implements GpuBackend {
             throw new BackendCreationException(e.getMessage(), BackendCreationException.Reason.OTHER);
         }
 
-        cocoa.setViewLayer(metalLayer.handle());
+        nsView.setLayer(metalLayer);
+        nsView.setWantsLayer(true);
 
         Metallum.LOGGER.info("Metal device: {}", deviceName);
 
         try {
-            return new GpuDevice(new MetalDevice(defaultShaderSource, debugOptions, metalDevice.handle(), metalLayer, deviceName, cocoa), criticalShaderLoader);
+            return new GpuDevice(new MetalDevice(defaultShaderSource, debugOptions, metalDevice, metalLayer, deviceName), criticalShaderLoader);
         } catch (Throwable throwable) {
             throw new BackendCreationException("Metal device initialization failed: " + throwable.getMessage(), BackendCreationException.Reason.OTHER);
         }

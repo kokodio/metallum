@@ -1,61 +1,42 @@
 package com.metallum.mtl;
 
-import com.metallum.objc.AutoreleasePool;
 import com.metallum.objc.Msg;
+import com.metallum.objc.NSObject;
 import com.metallum.objc.ObjC;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
 
 import java.lang.foreign.MemorySegment;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
-public final class MTLVertexDescriptor implements AutoCloseable {
+@Environment(EnvType.CLIENT)
+public final class MTLVertexDescriptor extends NSObject {
     private static final MemorySegment CLS = ObjC.clazz("MTLVertexDescriptor");
-    private static final Msg NEW = Msg.of("new", ADDRESS);
+    private static final Msg ALLOC = Msg.of("alloc", ADDRESS);
+    private static final Msg INIT = Msg.of("init", ADDRESS);
     private static final Msg ATTRIBUTES = Msg.of("attributes", ADDRESS);
     private static final Msg LAYOUTS = Msg.of("layouts", ADDRESS);
-    private static final Msg OBJECT_AT_INDEXED_SUBSCRIPT = Msg.of("objectAtIndexedSubscript:", ADDRESS, JAVA_LONG);
-    private static final Msg SET_FORMAT = Msg.ofVoid("setFormat:", JAVA_LONG);
-    private static final Msg SET_OFFSET = Msg.ofVoid("setOffset:", JAVA_LONG);
-    private static final Msg SET_BUFFER_INDEX = Msg.ofVoid("setBufferIndex:", JAVA_LONG);
-    private static final Msg SET_STRIDE = Msg.ofVoid("setStride:", JAVA_LONG);
-    private static final Msg SET_STEP_FUNCTION = Msg.ofVoid("setStepFunction:", JAVA_LONG);
-    private static final Msg SET_STEP_RATE = Msg.ofVoid("setStepRate:", JAVA_LONG);
 
-    private final MemorySegment handle;
-    private boolean closed;
-
-    public MTLVertexDescriptor() {
-        this.handle = NEW.sendPtr(CLS);
+    private MTLVertexDescriptor(final MemorySegment handle) {
+        super(handle);
     }
 
-    public MemorySegment handle() {
-        return this.handle;
+    public static MTLVertexDescriptor alloc() {
+        return new MTLVertexDescriptor(ALLOC.sendPtr(CLS));
     }
 
-    public void setAttribute(long index, long format, long offset, long bufferIndex) {
-        try (AutoreleasePool _ = AutoreleasePool.push()) {
-            MemorySegment attribute = OBJECT_AT_INDEXED_SUBSCRIPT.sendPtr(ATTRIBUTES.sendPtr(this.handle), index);
-            SET_FORMAT.send(attribute, format);
-            SET_OFFSET.send(attribute, offset);
-            SET_BUFFER_INDEX.send(attribute, bufferIndex);
-        }
+    public MTLVertexDescriptor init() {
+        this.handle = INIT.sendPtr(this.handle);
+        return this;
     }
 
-    public void setLayout(long bufferIndex, long stride, MTLVertexStepFunction stepFunction, long stepRate) {
-        try (AutoreleasePool _ = AutoreleasePool.push()) {
-            MemorySegment layout = OBJECT_AT_INDEXED_SUBSCRIPT.sendPtr(LAYOUTS.sendPtr(this.handle), bufferIndex);
-            SET_STRIDE.send(layout, stride);
-            SET_STEP_FUNCTION.send(layout, stepFunction.value);
-            SET_STEP_RATE.send(layout, stepRate);
-        }
+
+    public MTLVertexAttributeDescriptorArray attributes() {
+        return new MTLVertexAttributeDescriptorArray(ATTRIBUTES.sendPtr(this.handle));
     }
 
-    @Override
-    public void close() {
-        if (!this.closed) {
-            this.closed = true;
-            ObjC.release(this.handle);
-        }
+    public MTLVertexBufferLayoutDescriptorArray layouts() {
+        return new MTLVertexBufferLayoutDescriptorArray(LAYOUTS.sendPtr(this.handle));
     }
 }

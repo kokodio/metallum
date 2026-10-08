@@ -1,112 +1,70 @@
 package com.metallum.mtl;
 
-import com.metallum.objc.AutoreleasePool;
 import com.metallum.objc.Msg;
+import com.metallum.objc.NSObject;
 import com.metallum.objc.ObjC;
+import net.fabricmc.api.EnvType;
+import net.fabricmc.api.Environment;
 
 import java.lang.foreign.MemorySegment;
 
-import static java.lang.foreign.ValueLayout.*;
+import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
-public final class MTLRenderPipelineDescriptor implements AutoCloseable {
+@Environment(EnvType.CLIENT)
+public final class MTLRenderPipelineDescriptor extends NSObject {
     private static final MemorySegment CLS = ObjC.clazz("MTLRenderPipelineDescriptor");
-    private static final Msg NEW = Msg.of("new", ADDRESS);
+    private static final Msg ALLOC = Msg.of("alloc", ADDRESS);
+    private static final Msg INIT = Msg.of("init", ADDRESS);
+    private static final Msg SET_LABEL = Msg.ofVoid("setLabel:", ADDRESS);
     private static final Msg SET_VERTEX_FUNCTION = Msg.ofVoid("setVertexFunction:", ADDRESS);
     private static final Msg SET_FRAGMENT_FUNCTION = Msg.ofVoid("setFragmentFunction:", ADDRESS);
     private static final Msg SET_VERTEX_DESCRIPTOR = Msg.ofVoid("setVertexDescriptor:", ADDRESS);
     private static final Msg COLOR_ATTACHMENTS = Msg.of("colorAttachments", ADDRESS);
-    private static final Msg OBJECT_AT_INDEXED_SUBSCRIPT = Msg.of("objectAtIndexedSubscript:", ADDRESS, JAVA_LONG);
-    private static final Msg SET_PIXEL_FORMAT = Msg.ofVoid("setPixelFormat:", JAVA_LONG);
     private static final Msg SET_DEPTH_ATTACHMENT_PIXEL_FORMAT = Msg.ofVoid("setDepthAttachmentPixelFormat:", JAVA_LONG);
     private static final Msg SET_STENCIL_ATTACHMENT_PIXEL_FORMAT = Msg.ofVoid("setStencilAttachmentPixelFormat:", JAVA_LONG);
-    private static final Msg SET_WRITE_MASK = Msg.ofVoid("setWriteMask:", JAVA_LONG);
-    private static final Msg SET_BLENDING_ENABLED = Msg.ofVoid("setBlendingEnabled:", JAVA_BOOLEAN);
-    private static final Msg SET_SOURCE_RGB_BLEND_FACTOR = Msg.ofVoid("setSourceRGBBlendFactor:", JAVA_LONG);
-    private static final Msg SET_DESTINATION_RGB_BLEND_FACTOR = Msg.ofVoid("setDestinationRGBBlendFactor:", JAVA_LONG);
-    private static final Msg SET_RGB_BLEND_OPERATION = Msg.ofVoid("setRgbBlendOperation:", JAVA_LONG);
-    private static final Msg SET_SOURCE_ALPHA_BLEND_FACTOR = Msg.ofVoid("setSourceAlphaBlendFactor:", JAVA_LONG);
-    private static final Msg SET_DESTINATION_ALPHA_BLEND_FACTOR = Msg.ofVoid("setDestinationAlphaBlendFactor:", JAVA_LONG);
-    private static final Msg SET_ALPHA_BLEND_OPERATION = Msg.ofVoid("setAlphaBlendOperation:", JAVA_LONG);
 
-    private final MemorySegment handle;
-    private boolean closed;
-
-    public MTLRenderPipelineDescriptor() {
-        this.handle = NEW.sendPtr(CLS);
+    private MTLRenderPipelineDescriptor(final MemorySegment handle) {
+        super(handle);
     }
 
-    public MemorySegment handle() {
-        return this.handle;
+    public static MTLRenderPipelineDescriptor alloc() {
+        return new MTLRenderPipelineDescriptor(ALLOC.sendPtr(CLS));
     }
 
-    public void setCompiledFunctions(final MemorySegment vertexFunction, final MemorySegment fragmentFunction) {
-        SET_VERTEX_FUNCTION.send(this.handle, ObjC.orNil(vertexFunction));
-        SET_FRAGMENT_FUNCTION.send(this.handle, ObjC.orNil(fragmentFunction));
+    public MTLRenderPipelineDescriptor init() {
+        this.handle = INIT.sendPtr(this.handle);
+        return this;
+    }
+
+
+    public void setLabel(final String label) {
+        MemorySegment nsLabel = ObjC.nsString(label);
+        SET_LABEL.send(this.handle, nsLabel);
+        ObjC.release(nsLabel);
+    }
+
+    public void setVertexFunction(final MTLFunction vertexFunction) {
+        SET_VERTEX_FUNCTION.send(this.handle, vertexFunction.handle());
+    }
+
+    public void setFragmentFunction(final MTLFunction fragmentFunction) {
+        SET_FRAGMENT_FUNCTION.send(this.handle, fragmentFunction.handle());
     }
 
     public void setVertexDescriptor(final MTLVertexDescriptor vertexDescriptor) {
         SET_VERTEX_DESCRIPTOR.send(this.handle, vertexDescriptor.handle());
     }
 
-    public void setColorAttachmentFormat(final long index, final MTLPixelFormat format) {
-        setColorAttachmentFormat(index, format.value);
+    public MTLRenderPipelineColorAttachmentDescriptorArray colorAttachments() {
+        return new MTLRenderPipelineColorAttachmentDescriptorArray(COLOR_ATTACHMENTS.sendPtr(this.handle));
     }
 
-    public void setColorAttachmentFormat(final long index, final long pixelFormat) {
-        try (AutoreleasePool _ = AutoreleasePool.push()) {
-            SET_PIXEL_FORMAT.send(colorAttachment(index), pixelFormat);
-        }
+    public void setDepthAttachmentPixelFormat(final MTLPixelFormat depthAttachmentPixelFormat) {
+        SET_DEPTH_ATTACHMENT_PIXEL_FORMAT.send(this.handle, depthAttachmentPixelFormat.value);
     }
 
-    public void setDepthStencilFormats(final MTLPixelFormat depthFormat, final MTLPixelFormat stencilFormat) {
-        setDepthStencilFormats(depthFormat.value, stencilFormat.value);
-    }
-
-    public void setDepthStencilFormats(final long depthFormat, final long stencilFormat) {
-        SET_DEPTH_ATTACHMENT_PIXEL_FORMAT.send(this.handle, depthFormat);
-        SET_STENCIL_ATTACHMENT_PIXEL_FORMAT.send(this.handle, stencilFormat);
-    }
-
-    public void setBlendState(
-            final long index,
-            final MTLBlendFactor sourceColorBlendFactor,
-            final MTLBlendFactor destinationColorBlendFactor,
-            final MTLBlendOperation colorBlendOperation,
-            final MTLBlendFactor sourceAlphaBlendFactor,
-            final MTLBlendFactor destinationAlphaBlendFactor,
-            final MTLBlendOperation alphaBlendOperation,
-            final long writeMask
-    ) {
-        try (AutoreleasePool _ = AutoreleasePool.push()) {
-            MemorySegment attachment = colorAttachment(index);
-            SET_WRITE_MASK.send(attachment, writeMask);
-            SET_BLENDING_ENABLED.send(attachment, true);
-            SET_SOURCE_RGB_BLEND_FACTOR.send(attachment, sourceColorBlendFactor.value);
-            SET_DESTINATION_RGB_BLEND_FACTOR.send(attachment, destinationColorBlendFactor.value);
-            SET_RGB_BLEND_OPERATION.send(attachment, colorBlendOperation.value);
-            SET_SOURCE_ALPHA_BLEND_FACTOR.send(attachment, sourceAlphaBlendFactor.value);
-            SET_DESTINATION_ALPHA_BLEND_FACTOR.send(attachment, destinationAlphaBlendFactor.value);
-            SET_ALPHA_BLEND_OPERATION.send(attachment, alphaBlendOperation.value);
-        }
-    }
-
-    public void disableBlending(final long index, final long writeMask) {
-        try (AutoreleasePool _ = AutoreleasePool.push()) {
-            MemorySegment attachment = colorAttachment(index);
-            SET_WRITE_MASK.send(attachment, writeMask);
-            SET_BLENDING_ENABLED.send(attachment, false);
-        }
-    }
-
-    private MemorySegment colorAttachment(final long index) {
-        return OBJECT_AT_INDEXED_SUBSCRIPT.sendPtr(COLOR_ATTACHMENTS.sendPtr(this.handle), index);
-    }
-
-    @Override
-    public void close() {
-        if (!this.closed) {
-            this.closed = true;
-            ObjC.release(this.handle);
-        }
+    public void setStencilAttachmentPixelFormat(final MTLPixelFormat stencilAttachmentPixelFormat) {
+        SET_STENCIL_ATTACHMENT_PIXEL_FORMAT.send(this.handle, stencilAttachmentPixelFormat.value);
     }
 }

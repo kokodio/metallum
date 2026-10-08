@@ -1,46 +1,52 @@
 package com.metallum.render;
 
 import com.metallum.mtl.MTLTexture;
-import com.metallum.objc.ObjC;
+import com.metallum.mtl.NSRange;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.Nullable;
 
-import java.lang.foreign.MemorySegment;
 
 @Environment(EnvType.CLIENT)
 final class MetalGpuTextureView extends GpuTextureView {
     private boolean closed;
     @Nullable
-    private MemorySegment nativeHandle;
+    private MTLTexture metalTexture;
 
     MetalGpuTextureView(final GpuTexture texture, final int baseMipLevel, final int mipLevels) {
         super(texture, baseMipLevel, mipLevels);
         ((MetalGpuTexture) texture).addView();
     }
 
-    MemorySegment nativeHandle() {
-        if (this.nativeHandle == null) {
+    MTLTexture metalTexture() {
+        if (this.metalTexture == null) {
             MetalGpuTexture texture = (MetalGpuTexture) this.texture();
             if (this.baseMipLevel() == 0 && this.mipLevels() >= texture.getMipLevels()) {
-                this.nativeHandle = ObjC.retain(texture.nativeHandle());
+                texture.metalTexture().retain();
+                this.metalTexture = texture.metalTexture();
             } else {
-                MemorySegment viewHandle = MTLTexture.newTextureView(
-                        texture.nativeHandle(),
-                        this.baseMipLevel(),
-                        this.mipLevels()
-                );
-                if (ObjC.isNil(viewHandle)) {
+                boolean validRange = this.mipLevels() > 0 && this.baseMipLevel() + this.mipLevels() <= texture.getMipLevels();
+                MTLTexture view = validRange
+                        ? texture.metalTexture().newTextureView(
+                        texture.mtlPixelFormat(),
+                        texture.textureType(),
+                        new NSRange(this.baseMipLevel(), this.mipLevels()),
+                        new NSRange(0, texture.sliceCount()))
+                        : null;
+                if (view == null) {
                     throw new IllegalStateException(
                             "Failed to create Metal texture view for mip range " + this.baseMipLevel() + "+" + this.mipLevels()
                     );
                 }
-                this.nativeHandle = viewHandle;
+                if (!texture.getLabel().isEmpty()) {
+                    view.setLabel(texture.getLabel());
+                }
+                this.metalTexture = view;
             }
         }
-        return this.nativeHandle;
+        return this.metalTexture;
     }
 
     @Override
@@ -48,7 +54,7 @@ final class MetalGpuTextureView extends GpuTextureView {
         if (this.closed) {
             return;
         }
-        MemorySegment handle = this.nativeHandle();
+        MTLTexture handle = this.metalTexture();
         this.closed = true;
         MetalGpuTexture texture = (MetalGpuTexture) this.texture();
         texture.queueNativeRelease(handle);

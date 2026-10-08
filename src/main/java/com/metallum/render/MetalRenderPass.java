@@ -1,7 +1,6 @@
 package com.metallum.render;
 
 import com.metallum.mtl.*;
-import com.metallum.objc.ObjC;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.IndexType;
 import com.mojang.blaze3d.buffers.GpuBuffer;
@@ -82,6 +81,7 @@ final class MetalRenderPass implements RenderPassBackend {
         this.clearDepth = clearDepth;
     }
 
+    //todo
     @Override
     public void pushDebugGroup(final @NonNull Supplier<String> label) {
         pushedDebugGroups++;
@@ -90,6 +90,7 @@ final class MetalRenderPass implements RenderPassBackend {
         }
     }
 
+    //todo
     @Override
     public void popDebugGroup() {
         if (pushedDebugGroups == 0) {
@@ -247,7 +248,7 @@ final class MetalRenderPass implements RenderPassBackend {
         MTLBuffer indirectBuffer = ((MetalGpuBuffer) commands.buffer()).metalBuffer();
         long indirectOffset = commands.offset();
         for (int i = 0; i < drawCount; i++) {
-            enc.drawIndexedPrimitivesIndirect(primitiveType, indexType, indexBufferHandle, indirectBuffer, indirectOffset);
+            enc.drawIndexedPrimitives(primitiveType, indexType, indexBufferHandle, 0L, indirectBuffer, indirectOffset);
             indirectOffset += VkDrawIndexedIndirectCommand.SIZEOF;
         }
     }
@@ -319,7 +320,7 @@ final class MetalRenderPass implements RenderPassBackend {
         MTLBuffer indirectBuffer = ((MetalGpuBuffer) commands.buffer()).metalBuffer();
         long indirectOffset = commands.offset();
         for (int i = 0; i < drawCount; i++) {
-            enc.drawPrimitivesIndirect(primitiveType, indirectBuffer, indirectOffset);
+            enc.drawPrimitives(primitiveType, indirectBuffer, indirectOffset);
             indirectOffset += VkDrawIndirectCommand.SIZEOF;
         }
     }
@@ -340,13 +341,6 @@ final class MetalRenderPass implements RenderPassBackend {
             return MTLPixelFormat.Invalid;
         }
         return ((MetalGpuTexture) depthTexture.texture()).mtlPixelFormat();
-    }
-
-    MTLPixelFormat stencilAttachmentFormat() {
-        if (depthTexture == null) {
-            return MTLPixelFormat.Invalid;
-        }
-        return ((MetalGpuTexture) depthTexture.texture()).mtlStencilPixelFormat();
     }
 
     void materializePendingClear() {
@@ -473,7 +467,7 @@ final class MetalRenderPass implements RenderPassBackend {
         }
     }
 
-    private static void bindTexture(final MTLRenderCommandEncoder enc, final MemorySegment texture, final long index, final int stageMask) {
+    private static void bindTexture(final MTLRenderCommandEncoder enc, final MTLTexture texture, final long index, final int stageMask) {
         if ((stageMask & MetalCompiledRenderPipeline.STAGE_VERTEX) != 0) {
             enc.setVertexTexture(texture, index);
         }
@@ -482,7 +476,7 @@ final class MetalRenderPass implements RenderPassBackend {
         }
     }
 
-    private static void bindTextureAndSampler(final MTLRenderCommandEncoder enc, final MemorySegment texture, final MemorySegment sampler, final long index, final int stageMask) {
+    private static void bindTextureAndSampler(final MTLRenderCommandEncoder enc, final MTLTexture texture, final MTLSamplerState sampler, final long index, final int stageMask) {
         if ((stageMask & MetalCompiledRenderPipeline.STAGE_VERTEX) != 0) {
             enc.setVertexTexture(texture, index);
             enc.setVertexSamplerState(sampler, index);
@@ -507,19 +501,15 @@ final class MetalRenderPass implements RenderPassBackend {
 
         if (pipelineDirty) {
             boolean useDepth = depthAttachmentFormat().value != MTLPixelFormat.Invalid.value;
-            MemorySegment pipelineHandle = compiledPipeline.getNativePipeline(useDepth);
-            if (ObjC.isNil(pipelineHandle)) {
+            MTLRenderPipelineState pipelineState = compiledPipeline.getNativePipeline(useDepth);
+            if (pipelineState == null) {
                 throw new IllegalStateException("Native pipeline is unavailable");
             }
-            enc.setRenderPipelineState(pipelineHandle);
+            enc.setRenderPipelineState(pipelineState);
             pipelineDirty = false;
 
             if (useDepth) {
-                MemorySegment depthState = compiledPipeline.getDepthStencilState();
-                if (ObjC.isNil(depthState)) {
-                    throw new IllegalStateException("Native depth state is unavailable");
-                }
-                enc.setDepthStencilState(depthState);
+                enc.setDepthStencilState(compiledPipeline.getDepthStencilState());
                 enc.setDepthBias(
                         compiledPipeline.depthBiasConstant(),
                         compiledPipeline.depthBiasScaleFactor(),
@@ -608,7 +598,7 @@ final class MetalRenderPass implements RenderPassBackend {
 
             MetalGpuTextureView textureView = (MetalGpuTextureView) textureBinding.textureView();
             MetalGpuSampler sampler = (MetalGpuSampler) textureBinding.sampler();
-            bindTextureAndSampler(enc, textureView.nativeHandle(), sampler.nativeHandle(), binding.bindingIndex(), binding.stageMask());
+            bindTextureAndSampler(enc, textureView.metalTexture(), sampler.metalSampler(), binding.bindingIndex(), binding.stageMask());
             return;
         }
 
@@ -644,26 +634,28 @@ final class MetalRenderPass implements RenderPassBackend {
         }
 
         MetalGpuBuffer texelBuffer = (MetalGpuBuffer) texelSlice.buffer();
-        long pixelFormat = MTLPixelFormat.from(texelFormat).value;
+        MTLPixelFormat pixelFormat = MTLPixelFormat.from(texelFormat);
         int pixelSize = texelFormat.blockSize();
         long texelByteLength = texelSlice.length();
         if (texelByteLength <= 0L || texelByteLength % pixelSize != 0L) {
             throw new IllegalStateException("Texel buffer " + binding.name() + " length " + texelByteLength + " is not a valid " + texelFormat + " range");
         }
         long texelCount = texelByteLength / pixelSize;
-        MemorySegment texelTexture = MTLTexture.newBufferTextureView(
-                texelBuffer.nativeHandle(),
+        MTLTexture texelTexture = MetalUtilities.newBufferTextureView(
+                device.metalDevice(),
+                texelBuffer.metalBuffer(),
+                texelBuffer.storageMode(),
                 pixelFormat,
                 texelSlice.offset(),
                 texelCount,
                 texelByteLength
         );
-        if (ObjC.isNil(texelTexture)) {
+        if (texelTexture == null) {
             throw new IllegalStateException("Failed to create Metal texel buffer texture for " + binding.name());
         }
 
         bindTexture(enc, texelTexture, binding.bindingIndex(), binding.stageMask());
-        commandEncoder.queueForDestroy(() -> ObjC.release(texelTexture));
+        commandEncoder.queueForDestroy(texelTexture::release);
     }
 
     record TextureViewAndSampler(GpuTextureView textureView, GpuSampler sampler) {

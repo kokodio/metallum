@@ -1,6 +1,5 @@
 package com.metallum.render;
 
-import com.metallum.mtl.MTLBuffer;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBuffer.Usage;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
@@ -55,7 +54,7 @@ final class MetalTransientMemory implements TransientMemory {
     }
 
     private MetalGpuBuffer allocateGpuBlock(final long size) {
-        return new MetalGpuBuffer(device, BLOCK_USAGE, size);
+        return new MetalGpuBuffer(device, BLOCK_USAGE, size, device.useLabels() ? "Metal Transient Memory Buffer" : null);
     }
 
     private void freeGpuBlock(final MetalGpuBuffer block) {
@@ -93,7 +92,7 @@ final class MetalTransientMemory implements TransientMemory {
     }
 
     private MetalGpuBuffer wrap(final MetalGpuBuffer block, @Usage final int usage) {
-        return new TransientGpuBuffer(device, block.metalBuffer(), usage, block.size(), this, submitIndex);
+        return new TransientGpuBuffer(block, usage, this, submitIndex);
     }
 
     @Override
@@ -181,15 +180,8 @@ final class MetalTransientMemory implements TransientMemory {
         private final long bufferSubmitIndex;
         private boolean closed;
 
-        TransientGpuBuffer(
-                final MetalDevice device,
-                final MTLBuffer handle,
-                @Usage final int usage,
-                final long size,
-                final MetalTransientMemory owner,
-                final long submitIndex
-        ) {
-            super(device, usage, size, handle);
+        TransientGpuBuffer(final MetalGpuBuffer block, @Usage final int usage, final MetalTransientMemory owner, final long submitIndex) {
+            super(usage, block);
             this.owner = owner;
             this.bufferSubmitIndex = submitIndex;
         }
