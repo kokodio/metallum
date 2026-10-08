@@ -11,6 +11,5 @@ public class Metallum implements ModInitializer {
 
     @Override
     public void onInitialize() {
-        Telemetry.pingOncePerVersion();
     }
 }

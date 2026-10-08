@@ -40,4 +40,3 @@ replay_*.log
 *.jfr
 /src/main/resources/natives/macos/*
 libs/
-.wrangler
