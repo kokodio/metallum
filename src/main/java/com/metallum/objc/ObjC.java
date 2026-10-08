@@ -14,6 +14,7 @@ public final class ObjC {
     public static final SymbolLookup FOUNDATION = SymbolLookup.libraryLookup("/System/Library/Frameworks/Foundation.framework/Foundation", Arena.global());
     public static final SymbolLookup METAL = SymbolLookup.libraryLookup("/System/Library/Frameworks/Metal.framework/Metal", Arena.global());
     public static final SymbolLookup QUARTZ_CORE = SymbolLookup.libraryLookup("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", Arena.global());
+    public static final SymbolLookup CORE_GRAPHICS = SymbolLookup.libraryLookup("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics", Arena.global());
 
     private static final MemorySegment MSG_SEND = RUNTIME.findOrThrow("objc_msgSend");
     private static final MethodHandle OBJC_GET_CLASS =
@@ -100,6 +101,10 @@ public final class ObjC {
 
     public static MemorySegment orNil(MemorySegment segment) {
         return isNil(segment) ? MemorySegment.NULL : segment;
+    }
+
+    public static MemorySegment loadSymbol(SymbolLookup lookup, String name) {
+        return lookup.findOrThrow(name).reinterpret(ADDRESS.byteSize()).get(ADDRESS, 0);
     }
 
     public static MemorySegment selector(String name) {

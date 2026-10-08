@@ -19,6 +19,7 @@ public final class CAMetalLayer {
     private static final Msg SET_OPAQUE = Msg.ofVoid("setOpaque:", JAVA_BOOLEAN);
     private static final Msg SET_CONTENTS_SCALE = Msg.ofVoid("setContentsScale:", JAVA_DOUBLE);
     private static final Msg SET_PIXEL_FORMAT = Msg.ofVoid("setPixelFormat:", JAVA_LONG);
+    private static final Msg SET_COLORSPACE = Msg.ofVoid("setColorspace:", ADDRESS);
     private static final Msg SET_DRAWABLE_SIZE = Msg.ofVoid("setDrawableSize:", JAVA_DOUBLE, JAVA_DOUBLE);
     private static final Msg SET_ALLOWS_NEXT_DRAWABLE_TIMEOUT = Msg.ofVoid("setAllowsNextDrawableTimeout:", JAVA_BOOLEAN);
     private static final Msg SET_PRESENTS_WITH_TRANSACTION = Msg.ofVoid("setPresentsWithTransaction:", JAVA_BOOLEAN);
@@ -27,27 +28,55 @@ public final class CAMetalLayer {
 
     private final MemorySegment handle;
 
-    public CAMetalLayer(final MTLDevice device, final double contentsScale) {
+    public CAMetalLayer() {
         this.handle = NEW.sendPtr(CLS);
         if (ObjC.isNil(this.handle)) {
             throw new IllegalStateException("Failed to create CAMetalLayer");
         }
-        SET_DEVICE.send(this.handle, device.handle());
-        SET_FRAMEBUFFER_ONLY.send(this.handle, false);
-        SET_OPAQUE.send(this.handle, true);
-        SET_CONTENTS_SCALE.send(this.handle, contentsScale);
     }
 
     public MemorySegment handle() {
         return this.handle;
     }
 
-    public void configure(final double width, final double height, final boolean immediatePresentMode) {
-        SET_PIXEL_FORMAT.send(this.handle, MTLPixelFormat.BGRA8Unorm.value);
+    public void setDevice(final MTLDevice device) {
+        SET_DEVICE.send(this.handle, device.handle());
+    }
+
+    public void setFramebufferOnly(final boolean framebufferOnly) {
+        SET_FRAMEBUFFER_ONLY.send(this.handle, framebufferOnly);
+    }
+
+    public void setOpaque(final boolean opaque) {
+        SET_OPAQUE.send(this.handle, opaque);
+    }
+
+    public void setContentsScale(final double contentsScale) {
+        SET_CONTENTS_SCALE.send(this.handle, contentsScale);
+    }
+
+    public void setPixelFormat(final MTLPixelFormat pixelFormat) {
+        SET_PIXEL_FORMAT.send(this.handle, pixelFormat.value);
+    }
+
+    public void setColorspace(final CGColorSpace colorspace) {
+        SET_COLORSPACE.send(this.handle, colorspace.handle());
+    }
+
+    public void setDrawableSize(final double width, final double height) {
         SET_DRAWABLE_SIZE.send(this.handle, width, height);
-        SET_ALLOWS_NEXT_DRAWABLE_TIMEOUT.send(this.handle, false);
-        SET_PRESENTS_WITH_TRANSACTION.send(this.handle, false);
-        SET_DISPLAY_SYNC_ENABLED.send(this.handle, !immediatePresentMode);
+    }
+
+    public void setAllowsNextDrawableTimeout(final boolean allowsNextDrawableTimeout) {
+        SET_ALLOWS_NEXT_DRAWABLE_TIMEOUT.send(this.handle, allowsNextDrawableTimeout);
+    }
+
+    public void setPresentsWithTransaction(final boolean presentsWithTransaction) {
+        SET_PRESENTS_WITH_TRANSACTION.send(this.handle, presentsWithTransaction);
+    }
+
+    public void setDisplaySyncEnabled(final boolean displaySyncEnabled) {
+        SET_DISPLAY_SYNC_ENABLED.send(this.handle, displaySyncEnabled);
     }
 
     @Nullable

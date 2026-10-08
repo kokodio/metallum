@@ -70,7 +70,7 @@ final class MetalDevice implements GpuDeviceBackend {
 
     @Override
     public @NonNull GpuSurfaceBackend createSurface(final long windowHandle) {
-        return new MetalSurface(this, this.metalLayer);
+        return new MetalSurface(this.metalLayer);
     }
 
     @Override
@@ -208,10 +208,6 @@ final class MetalDevice implements GpuDeviceBackend {
     @Override
     public @NonNull DeviceInfo getDeviceInfo() {
         return this.deviceInfo;
-    }
-
-    MemorySegment metalDeviceHandle() {
-        return this.metalDeviceHandle;
     }
 
     MTLDevice metalDevice() {

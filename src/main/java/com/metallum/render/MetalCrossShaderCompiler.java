@@ -257,7 +257,7 @@ final class MetalCrossShaderCompiler {
             }
             int width = format.name().contains("8") ? Spvc.SPVC_MSL_SHADER_VARIABLE_FORMAT_UINT8
                     : format.name().contains("16") ? Spvc.SPVC_MSL_SHADER_VARIABLE_FORMAT_UINT16
-                      : Spvc.SPVC_MSL_SHADER_VARIABLE_FORMAT_OTHER;
+                    : Spvc.SPVC_MSL_SHADER_VARIABLE_FORMAT_OTHER;
             if (width == Spvc.SPVC_MSL_SHADER_VARIABLE_FORMAT_OTHER) {
                 continue;
             }

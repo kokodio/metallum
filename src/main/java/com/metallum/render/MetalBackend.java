@@ -1,7 +1,9 @@
 package com.metallum.render;
 
 import com.metallum.Metallum;
+import com.metallum.MetallumConfig;
 import com.metallum.mtl.CAMetalLayer;
+import com.metallum.mtl.CGColorSpace;
 import com.metallum.mtl.MTLDevice;
 import com.metallum.objc.Cocoa;
 import com.mojang.blaze3d.GLFWErrorCapture;
@@ -59,7 +61,14 @@ public class MetalBackend implements GpuBackend {
 
         CAMetalLayer metalLayer;
         try {
-            metalLayer = new CAMetalLayer(metalDevice, cocoa.backingScaleFactor());
+            metalLayer = new CAMetalLayer();
+            metalLayer.setDevice(metalDevice);
+            metalLayer.setFramebufferOnly(false);
+            metalLayer.setOpaque(true);
+            metalLayer.setContentsScale(cocoa.backingScaleFactor());
+            try (CGColorSpace colorspace = CGColorSpace.createWithName(MetallumConfig.INSTANCE.displayP3 ? CGColorSpace.kCGColorSpaceDisplayP3 : CGColorSpace.kCGColorSpaceSRGB)) {
+                metalLayer.setColorspace(colorspace);
+            }
         } catch (IllegalStateException e) {
             throw new BackendCreationException(e.getMessage(), BackendCreationException.Reason.OTHER);
         }

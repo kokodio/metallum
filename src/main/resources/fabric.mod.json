@@ -18,6 +18,9 @@
   "entrypoints": {
     "main": [
       "com.metallum.Metallum"
+    ],
+    "sodium:config_api_user": [
+      "com.metallum.sodium.MetallumSodiumConfig"
     ]
   },
   "mixins": [
