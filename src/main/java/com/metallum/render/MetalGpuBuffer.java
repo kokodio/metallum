@@ -1,12 +1,11 @@
 package com.metallum.render;
 
-import io.github.kokodio.metaljvm.metal.MTLBuffer;
-import io.github.kokodio.metaljvm.metal.MTLHazardTrackingMode;
-import io.github.kokodio.metaljvm.metal.MTLResourceOptions;
-import io.github.kokodio.metaljvm.metal.MTLStorageMode;
-import io.github.kokodio.metaljvm.objc.ObjC;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
+import io.github.kokodio.metaljvm.metal.MTLBuffer;
+import io.github.kokodio.metaljvm.metal.MTLHazardTrackingMode;
+import io.github.kokodio.metaljvm.metal.MTLStorageMode;
+import io.github.kokodio.metaljvm.objc.ObjC;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.NonNull;

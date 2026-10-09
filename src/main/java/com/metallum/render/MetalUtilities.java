@@ -1,15 +1,17 @@
 package com.metallum.render;
 
 import com.metallum.Metallum;
-import io.github.kokodio.metaljvm.metal.*;
-import io.github.kokodio.metaljvm.quartzcore.*;
-import io.github.kokodio.metaljvm.objc.AutoreleasePool;
-import io.github.kokodio.metaljvm.foundation.NSErrorException;
-import io.github.kokodio.metaljvm.foundation.NSObject;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
+import io.github.kokodio.metaljvm.foundation.NSErrorException;
+import io.github.kokodio.metaljvm.foundation.NSObject;
+import io.github.kokodio.metaljvm.metal.*;
+import io.github.kokodio.metaljvm.objc.AutoreleasePool;
+import io.github.kokodio.metaljvm.quartzcore.CAMetalDrawable;
+import io.github.kokodio.metaljvm.quartzcore.CAMetalLayer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.joml.Vector4fc;
@@ -65,19 +67,18 @@ final class MetalUtilities {
             }
             """;
 
+    private static final int CLEAR_UNIFORMS_SIZE = 16 + 16 * ColorTargetState.MAX_COLOR_TARGETS;
     private static final String CLEAR_MSL = """
             #include <metal_stdlib>
             using namespace metal;
             
             struct ClearUniforms {
-              float z;
-              float3 _padding0;
-              float4 color;
+              float4 z;
+              float4 colors[8];
             };
             
             struct ClearVertexOut {
               float4 position [[position]];
-              float4 color;
             };
             
             vertex ClearVertexOut metallum_clear_vs(
@@ -91,13 +92,8 @@ final class MetalUtilities {
               };
             
               ClearVertexOut out;
-              out.position = float4(positions[vertexId], u.z, 1.0);
-              out.color = u.color;
+              out.position = float4(positions[vertexId], u.z.x, 1.0);
               return out;
-            }
-            
-            fragment float4 metallum_clear_fs(ClearVertexOut in [[stage_in]]) {
-              return in.color;
             }
             """;
 
@@ -108,7 +104,7 @@ final class MetalUtilities {
     private static MTLSamplerState presentLinearSampler;
     @Nullable
     private static MTLSamplerState presentNearestSampler;
-    private static final Map<Long, MTLRenderPipelineState> clearPipelines = new HashMap<>();
+    private static final Map<ClearPipelineKey, MTLRenderPipelineState> clearPipelines = new HashMap<>();
     private static final Map<Long, MTLDepthStencilState> depthStencilStates = new HashMap<>();
 
     private MetalUtilities() {
@@ -117,12 +113,12 @@ final class MetalUtilities {
     static void init(final MTLDevice mtlDevice) {
         device = mtlDevice;
         presentPipeline = buildPipeline(PRESENT_MSL, "metallum_present_vs", "metallum_present_fs",
-                MTLPixelFormat.BGRA8Unorm, MTLPixelFormat.Invalid, MTLColorWriteMask.All);
+                new MTLPixelFormat[]{MTLPixelFormat.BGRA8Unorm}, MTLPixelFormat.Invalid, 1);
         presentLinearSampler = buildPresentSampler(MTLSamplerMinMagFilter.Linear);
         presentNearestSampler = buildPresentSampler(MTLSamplerMinMagFilter.Nearest);
-        ensureClearPipeline(MTLPixelFormat.BGRA8Unorm, MTLPixelFormat.Depth32Float, true);
-        ensureClearPipeline(MTLPixelFormat.RGBA8Unorm, MTLPixelFormat.Depth32Float, true);
-        ensureClearPipeline(MTLPixelFormat.BGRA8Unorm, MTLPixelFormat.Invalid, true);
+        ensureClearPipeline(new MTLPixelFormat[]{MTLPixelFormat.BGRA8Unorm}, MTLPixelFormat.Depth32Float, 1);
+        ensureClearPipeline(new MTLPixelFormat[]{MTLPixelFormat.RGBA8Unorm}, MTLPixelFormat.Depth32Float, 1);
+        ensureClearPipeline(new MTLPixelFormat[]{MTLPixelFormat.BGRA8Unorm}, MTLPixelFormat.Invalid, 1);
     }
 
     static void close() {
@@ -147,11 +143,11 @@ final class MetalUtilities {
 
     static void clearDraw(
             final MTLRenderCommandEncoder encoder,
-            final MTLPixelFormat colorFormat,
+            final MTLPixelFormat[] colorFormats,
             final MTLPixelFormat depthFormat,
             final int targetWidth,
             final int targetHeight,
-            @Nullable final Vector4fc clearColor,
+            @Nullable final Vector4fc[] clearColors,
             @Nullable final Double clearDepth,
             final RenderPass.RenderArea area
     ) {
@@ -163,7 +159,7 @@ final class MetalUtilities {
             return;
         }
 
-        MTLRenderPipelineState pipeline = ensureClearPipeline(colorFormat, depthFormat, clearColor != null);
+        MTLRenderPipelineState pipeline = ensureClearPipeline(colorFormats, depthFormat, writeBits(clearColors));
         if (pipeline == null) {
             return;
         }
@@ -172,18 +168,29 @@ final class MetalUtilities {
         encoder.setViewport(new MTLViewport(0.0, 0.0, targetWidth, targetHeight, 0.0, 1.0));
         encoder.setScissorRect(new MTLScissorRect(left, top, right - left, bottom - top));
         encoder.setRenderPipelineState(pipeline);
+        encoder.setCullMode(MTLCullMode.None);
+        encoder.setTriangleFillMode(MTLTriangleFillMode.Fill);
         if (hasDepth) {
             encoder.setDepthStencilState(ensureDepthStencilState(MTLCompareFunction.Always, clearDepth != null));
+            encoder.setDepthBias(0.0f, 0.0f, 0.0f);
         }
 
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            MemorySegment uniforms = MemorySegment.ofAddress(stack.nmalloc(16, 48)).reinterpret(48);
+            MemorySegment uniforms = MemorySegment.ofAddress(stack.ncalloc(16, 1, CLEAR_UNIFORMS_SIZE)).reinterpret(CLEAR_UNIFORMS_SIZE);
             uniforms.set(JAVA_FLOAT, 0, hasDepth && clearDepth != null ? (float) Math.clamp(clearDepth, 0.0, 1.0) : 0.0f);
-            uniforms.set(JAVA_FLOAT, 32, clearColor == null ? 0.0f : clearColor.x());
-            uniforms.set(JAVA_FLOAT, 36, clearColor == null ? 0.0f : clearColor.y());
-            uniforms.set(JAVA_FLOAT, 40, clearColor == null ? 0.0f : clearColor.z());
-            uniforms.set(JAVA_FLOAT, 44, clearColor == null ? 0.0f : clearColor.w());
-            encoder.setVertexBytes(uniforms, 48L, 1L);
+            for (int i = 0; clearColors != null && i < clearColors.length; i++) {
+                Vector4fc clearColor = clearColors[i];
+                if (clearColor == null) {
+                    continue;
+                }
+                long offset = 16L + 16L * i;
+                uniforms.set(JAVA_FLOAT, offset, clearColor.x());
+                uniforms.set(JAVA_FLOAT, offset + 4, clearColor.y());
+                uniforms.set(JAVA_FLOAT, offset + 8, clearColor.z());
+                uniforms.set(JAVA_FLOAT, offset + 12, clearColor.w());
+            }
+            encoder.setVertexBytes(uniforms, CLEAR_UNIFORMS_SIZE, 1L);
+            encoder.setFragmentBytes(uniforms, CLEAR_UNIFORMS_SIZE, 1L);
         }
 
         encoder.drawPrimitives(MTLPrimitiveType.Triangle, 0, 3, 1, 0);
@@ -236,18 +243,54 @@ final class MetalUtilities {
     }
 
     @Nullable
-    private static MTLRenderPipelineState ensureClearPipeline(final MTLPixelFormat colorFormat, final MTLPixelFormat depthFormat, final boolean writeColor) {
-        long key = (colorFormat.value << 32) | (depthFormat.value << 1) | (writeColor ? 1L : 0L);
+    private static MTLRenderPipelineState ensureClearPipeline(final MTLPixelFormat[] colorFormats, final MTLPixelFormat depthFormat, final int writeBits) {
+        ClearPipelineKey key = new ClearPipelineKey(List.of(colorFormats), depthFormat, writeBits);
         MTLRenderPipelineState cached = clearPipelines.get(key);
         if (cached != null) {
             return cached;
         }
-        MTLRenderPipelineState pipeline = buildPipeline(CLEAR_MSL, "metallum_clear_vs", "metallum_clear_fs",
-                colorFormat, depthFormat, writeColor ? MTLColorWriteMask.All : MTLColorWriteMask.None);
+        MTLRenderPipelineState pipeline = buildPipeline(CLEAR_MSL + clearFragmentMsl(colorFormats), "metallum_clear_vs", "metallum_clear_fs",
+                colorFormats, depthFormat, writeBits);
         if (pipeline != null) {
             clearPipelines.put(key, pipeline);
         }
         return pipeline;
+    }
+
+    private static String clearFragmentMsl(final MTLPixelFormat[] colorFormats) {
+        StringBuilder outputs = new StringBuilder();
+        StringBuilder writes = new StringBuilder();
+        for (int i = 0; i < colorFormats.length; i++) {
+            if (colorFormats[i] != MTLPixelFormat.Invalid) {
+                outputs.append("  float4 color%d [[color(%d)]];\n".formatted(i, i));
+                writes.append("  out.color%d = u.colors[%d];\n".formatted(i, i));
+            }
+        }
+        if (outputs.isEmpty()) {
+            return "fragment void metallum_clear_fs() {}\n";
+        }
+        return """
+                struct ClearFragmentOut {
+                %s};
+                
+                fragment ClearFragmentOut metallum_clear_fs(constant ClearUniforms& u [[buffer(1)]]) {
+                  ClearFragmentOut out;
+                %s  return out;
+                }
+                """.formatted(outputs, writes);
+    }
+
+    private static int writeBits(@Nullable final Vector4fc[] clearColors) {
+        int bits = 0;
+        for (int i = 0; clearColors != null && i < clearColors.length; i++) {
+            if (clearColors[i] != null) {
+                bits |= 1 << i;
+            }
+        }
+        return bits;
+    }
+
+    private record ClearPipelineKey(List<MTLPixelFormat> colorFormats, MTLPixelFormat depthFormat, int writeBits) {
     }
 
     private static MTLDepthStencilState ensureDepthStencilState(final MTLCompareFunction compareOp, final boolean writeDepth) {
@@ -270,9 +313,9 @@ final class MetalUtilities {
             final String mslSource,
             final String vertexEntry,
             final String fragmentEntry,
-            final MTLPixelFormat colorFormat,
+            final MTLPixelFormat[] colorFormats,
             final MTLPixelFormat depthFormat,
-            final long writeMask
+            final int writeBits
     ) {
         try (AutoreleasePool _ = AutoreleasePool.push()) {
             MTLLibrary library = newLibrary(device, mslSource);
@@ -289,10 +332,15 @@ final class MetalUtilities {
                 descriptor.setVertexFunction(vertexFunction);
                 descriptor.setFragmentFunction(fragmentFunction);
                 descriptor.setDepthAttachmentPixelFormat(depthFormat);
-                MTLRenderPipelineColorAttachmentDescriptor attachment = descriptor.colorAttachments().objectAtIndexedSubscript(0);
-                attachment.setPixelFormat(colorFormat);
-                attachment.setBlendingEnabled(false);
-                attachment.setWriteMask(writeMask);
+                for (int i = 0; i < colorFormats.length; i++) {
+                    if (colorFormats[i] == MTLPixelFormat.Invalid) {
+                        continue;
+                    }
+                    MTLRenderPipelineColorAttachmentDescriptor attachment = descriptor.colorAttachments().objectAtIndexedSubscript(i);
+                    attachment.setPixelFormat(colorFormats[i]);
+                    attachment.setBlendingEnabled(false);
+                    attachment.setWriteMask((writeBits & (1 << i)) != 0 ? MTLColorWriteMask.All : MTLColorWriteMask.None);
+                }
                 pipeline = newRenderPipelineState(device, descriptor);
                 descriptor.release();
             }

@@ -1,6 +1,5 @@
 package com.metallum.render;
 
-import io.github.kokodio.metaljvm.metal.*;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.IndexType;
 import com.mojang.blaze3d.buffers.GpuBuffer;
@@ -12,6 +11,7 @@ import com.mojang.blaze3d.systems.RenderPassBackend;
 import com.mojang.blaze3d.systems.ScissorState;
 import com.mojang.blaze3d.textures.GpuSampler;
 import com.mojang.blaze3d.textures.GpuTextureView;
+import io.github.kokodio.metaljvm.metal.*;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.SharedConstants;
@@ -38,12 +38,16 @@ final class MetalRenderPass implements RenderPassBackend {
     private final MetalCommandEncoder commandEncoder;
     @Nullable
     private final String label;
-    private final GpuTextureView colorTexture;
+    private final GpuTextureView targetView;
+    private final MTLTexture[] colorAttachments;
+    private final MTLPixelFormat[] colorFormats;
+    private final int layout;
     @Nullable
     private final GpuTextureView depthTexture;
     private final RenderPass.RenderArea renderArea;
+    private final boolean fullArea;
     @Nullable
-    private Vector4fc clearColor;
+    private Vector4fc[] clearColors;
     @Nullable
     private Double clearDepth;
     private final ScissorState scissorState = new ScissorState();
@@ -65,19 +69,32 @@ final class MetalRenderPass implements RenderPassBackend {
             final MetalDevice device,
             final MetalCommandEncoder encoder,
             final Supplier<String> label,
-            final GpuTextureView colorTexture,
+            final GpuTextureView[] colorTextures,
             @Nullable final GpuTextureView depthTexture,
             final RenderPass.RenderArea renderArea,
-            @Nullable final Vector4fc clearColor,
+            @Nullable final Vector4fc[] clearColors,
             @Nullable final Double clearDepth
     ) {
         this.device = device;
         this.commandEncoder = encoder;
         this.label = device.useLabels() ? label.get() : null;
-        this.colorTexture = colorTexture;
+        this.targetView = colorTextures.length != 0 ? colorTextures[0] : depthTexture;
+        this.colorAttachments = new MTLTexture[colorTextures.length];
+        this.colorFormats = new MTLPixelFormat[colorTextures.length];
+        int layout = depthTexture == null ? 0 : MetalCompiledRenderPipeline.LAYOUT_DEPTH;
+        for (int i = 0; i < colorTextures.length; i++) {
+            GpuTextureView view = colorTextures[i];
+            this.colorAttachments[i] = view == null ? null : ((MetalGpuTextureView) view).metalTexture();
+            this.colorFormats[i] = view == null ? MTLPixelFormat.Invalid : ((MetalGpuTexture) view.texture()).mtlPixelFormat();
+            if (view != null) {
+                layout |= 1 << i;
+            }
+        }
+        this.layout = layout;
         this.depthTexture = depthTexture;
         this.renderArea = renderArea;
-        this.clearColor = clearColor;
+        this.fullArea = renderArea.fillsTexture(this.targetView);
+        this.clearColors = clearColors;
         this.clearDepth = clearDepth;
     }
 
@@ -332,10 +349,6 @@ final class MetalRenderPass implements RenderPassBackend {
         }
     }
 
-    MTLPixelFormat colorAttachmentFormat() {
-        return ((MetalGpuTexture) colorTexture.texture()).mtlPixelFormat();
-    }
-
     MTLPixelFormat depthAttachmentFormat() {
         if (depthTexture == null) {
             return MTLPixelFormat.Invalid;
@@ -344,24 +357,25 @@ final class MetalRenderPass implements RenderPassBackend {
     }
 
     void materializePendingClear() {
-        if (clearColor != null || clearDepth != null) {
+        if (clearColors != null || clearDepth != null) {
             renderEncoder();
         }
     }
 
     private MTLRenderCommandEncoder renderEncoder() {
-        MetalGpuTextureView colorTextureView = (MetalGpuTextureView) colorTexture;
-        MetalGpuTextureView depthTextureView = depthTexture == null ? null : (MetalGpuTextureView) depthTexture;
         MTLRenderCommandEncoder encoder = commandEncoder.renderCommandEncoder(
-                colorTextureView,
-                depthTextureView,
-                colorTexture.getWidth(0),
-                colorTexture.getHeight(0),
-                clearColor,
+                colorAttachments,
+                colorFormats,
+                depthTexture == null ? null : ((MetalGpuTextureView) depthTexture).metalTexture(),
+                depthAttachmentFormat(),
+                targetView.getWidth(0),
+                targetView.getHeight(0),
+                clearColors,
                 clearDepth,
-                renderArea
+                renderArea,
+                fullArea
         );
-        clearColor = null;
+        clearColors = null;
         clearDepth = null;
         return encoder;
     }
@@ -500,15 +514,14 @@ final class MetalRenderPass implements RenderPassBackend {
         }
 
         if (pipelineDirty) {
-            boolean useDepth = depthAttachmentFormat().value != MTLPixelFormat.Invalid.value;
-            MTLRenderPipelineState pipelineState = compiledPipeline.getNativePipeline(useDepth);
+            MTLRenderPipelineState pipelineState = compiledPipeline.getNativePipeline(layout);
             if (pipelineState == null) {
                 throw new IllegalStateException("Native pipeline is unavailable");
             }
             enc.setRenderPipelineState(pipelineState);
             pipelineDirty = false;
 
-            if (useDepth) {
+            if (depthTexture != null) {
                 enc.setDepthStencilState(compiledPipeline.getDepthStencilState());
                 enc.setDepthBias(
                         compiledPipeline.depthBiasConstant(),
@@ -560,8 +573,8 @@ final class MetalRenderPass implements RenderPassBackend {
         int areaLeft = renderArea.x();
         int areaTop = renderArea.y();
         if (!scissorState.enabled()) {
-            if (renderArea.fillsTexture(colorTexture)) {
-                enc.setScissorRect(new MTLScissorRect(0L, 0L, colorTexture.getWidth(0), colorTexture.getHeight(0)));
+            if (fullArea) {
+                enc.setScissorRect(new MTLScissorRect(0L, 0L, targetView.getWidth(0), targetView.getHeight(0)));
                 return;
             }
             enc.setScissorRect(new MTLScissorRect(areaLeft, areaTop, renderArea.width(), renderArea.height()));
@@ -602,7 +615,7 @@ final class MetalRenderPass implements RenderPassBackend {
 
             MetalGpuTextureView textureView = (MetalGpuTextureView) textureBinding.textureView();
             MetalGpuSampler sampler = (MetalGpuSampler) textureBinding.sampler();
-            bindTextureAndSampler(enc, textureView.metalTexture(), sampler.metalSampler(), binding.bindingIndex(), binding.stageMask());
+            bindTextureAndSampler(enc, textureView.metalTexture(), sampler.metalSampler(), binding.metalIndex(), binding.stageMask());
             return;
         }
 
@@ -620,7 +633,7 @@ final class MetalRenderPass implements RenderPassBackend {
         }
 
         MetalGpuBuffer uniformBuffer = (MetalGpuBuffer) uniformSlice.buffer();
-        bindBuffer(enc, uniformBuffer.metalBuffer(), uniformSlice.offset(), binding.bindingIndex(), binding.stageMask());
+        bindBuffer(enc, uniformBuffer.metalBuffer(), uniformSlice.offset(), binding.metalIndex(), binding.stageMask());
     }
 
     private void pushTexelBufferDescriptor(final MTLRenderCommandEncoder enc, final MetalCompiledRenderPipeline.ResourceBinding binding) {
@@ -658,7 +671,7 @@ final class MetalRenderPass implements RenderPassBackend {
             throw new IllegalStateException("Failed to create Metal texel buffer texture for " + binding.name());
         }
 
-        bindTexture(enc, texelTexture, binding.bindingIndex(), binding.stageMask());
+        bindTexture(enc, texelTexture, binding.metalIndex(), binding.stageMask());
         commandEncoder.queueForDestroy(texelTexture::release);
     }
 

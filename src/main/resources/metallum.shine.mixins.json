@@ -1,0 +1,16 @@
+{
+  "required": true,
+  "package": "com.metallum.compat.shine.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "mixins": [
+  ],
+  "client": [
+    "ShineRenderBackendMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "overwrites": {
+    "requireAnnotations": true
+  }
+}

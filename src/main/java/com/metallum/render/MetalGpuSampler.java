@@ -1,9 +1,11 @@
 package com.metallum.render;
 
-import io.github.kokodio.metaljvm.metal.*;
 import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
+import io.github.kokodio.metaljvm.metal.MTLSamplerDescriptor;
+import io.github.kokodio.metaljvm.metal.MTLSamplerMipFilter;
+import io.github.kokodio.metaljvm.metal.MTLSamplerState;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.NonNull;

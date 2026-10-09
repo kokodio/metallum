@@ -1,13 +1,13 @@
 package com.metallum.render;
 
-import io.github.kokodio.metaljvm.coregraphics.CGSize;
-import io.github.kokodio.metaljvm.quartzcore.CAMetalLayer;
-import io.github.kokodio.metaljvm.metal.MTLPixelFormat;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.GpuSurface;
 import com.mojang.blaze3d.systems.GpuSurfaceBackend;
 import com.mojang.blaze3d.systems.SurfaceException;
 import com.mojang.blaze3d.textures.GpuTextureView;
+import io.github.kokodio.metaljvm.coregraphics.CGSize;
+import io.github.kokodio.metaljvm.metal.MTLPixelFormat;
+import io.github.kokodio.metaljvm.quartzcore.CAMetalLayer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.NonNull;

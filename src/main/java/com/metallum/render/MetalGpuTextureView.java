@@ -1,9 +1,9 @@
 package com.metallum.render;
 
-import io.github.kokodio.metaljvm.metal.MTLTexture;
-import io.github.kokodio.metaljvm.foundation.NSRange;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
+import io.github.kokodio.metaljvm.foundation.NSRange;
+import io.github.kokodio.metaljvm.metal.MTLTexture;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.Nullable;

@@ -1,8 +1,8 @@
 package com.metallum.render;
 
-import io.github.kokodio.metaljvm.metal.*;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.textures.GpuTexture;
+import io.github.kokodio.metaljvm.metal.*;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.joml.Vector4fc;

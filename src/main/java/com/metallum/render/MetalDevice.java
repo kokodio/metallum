@@ -1,11 +1,9 @@
 package com.metallum.render;
 
 import com.metallum.Metallum;
-import io.github.kokodio.metaljvm.metal.*;
-import io.github.kokodio.metaljvm.quartzcore.*;
-import io.github.kokodio.metaljvm.foundation.NSObject;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.preprocessor.GlslPreprocessor;
@@ -17,6 +15,9 @@ import com.mojang.blaze3d.textures.*;
 import com.mojang.blaze3d.vulkan.glsl.GlslCompiler;
 import com.mojang.blaze3d.vulkan.glsl.IntermediaryShaderModule;
 import com.mojang.blaze3d.vulkan.glsl.ShaderCompileException;
+import io.github.kokodio.metaljvm.foundation.NSObject;
+import io.github.kokodio.metaljvm.metal.*;
+import io.github.kokodio.metaljvm.quartzcore.CAMetalLayer;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import net.minecraft.client.renderer.ShaderDefines;
@@ -290,7 +291,7 @@ final class MetalDevice implements GpuDeviceBackend {
                 true,
                 "Metal",
                 1.0F,
-                new DeviceLimits(16, 256, 16384, maxMemoryAllocationSize, 0, 1),
+                new DeviceLimits(16, 256, 16384, maxMemoryAllocationSize, 0, ColorTargetState.MAX_COLOR_TARGETS),
                 new DeviceFeatures(false, false, false, true, true, false, true),
                 extensions,
                 new HintsAndWorkarounds(false, false),
