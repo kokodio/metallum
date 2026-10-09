@@ -1,11 +1,11 @@
 {
   "required": true,
-  "package": "com.metallum.mixin",
+  "package": "com.metallum.compat.distanthorizons.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
   ],
   "client": [
-    "PreferredGraphicsApiMixin"
+    "MinecraftRenderWrapperMixin"
   ],
   "injectors": {
     "defaultRequire": 1

@@ -1,11 +1,13 @@
 {
   "required": true,
-  "package": "com.metallum.mixin",
+  "package": "com.metallum.compat.sodium.mixin",
   "compatibilityLevel": "JAVA_25",
   "mixins": [
   ],
   "client": [
-    "PreferredGraphicsApiMixin"
+    "DrawBackendMixin",
+    "DrawContextMixin",
+    "SodiumPreferredGraphicsApiMixin"
   ],
   "injectors": {
     "defaultRequire": 1

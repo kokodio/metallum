@@ -1,9 +1,7 @@
-package com.metallum.mixin.render;
+package com.metallum.mixin;
 
 import com.metallum.render.MetalBackend;
-import com.mojang.blaze3d.opengl.GlBackend;
 import com.mojang.blaze3d.systems.GpuBackend;
-import com.mojang.blaze3d.vulkan.VulkanBackend;
 import net.minecraft.client.PreferredGraphicsApi;
 import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;
@@ -15,19 +13,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 abstract class PreferredGraphicsApiMixin {
     @Inject(method = "getBackendsToTry", at = @At("HEAD"), cancellable = true)
     private void metallum$injectMetalBackend(final CallbackInfoReturnable<GpuBackend[]> cir) {
-        PreferredGraphicsApi self = (PreferredGraphicsApi) (Object) this;
-        if (self != PreferredGraphicsApi.DEFAULT) {
-            return;
-        }
-
-        cir.setReturnValue(new GpuBackend[]{new MetalBackend(), new VulkanBackend(), new GlBackend()});
+        cir.setReturnValue(new GpuBackend[]{new MetalBackend()});
     }
 
     @Inject(method = "caption", at = @At("HEAD"), cancellable = true)
     private void metallum$renameDefaultApiToMetal(final CallbackInfoReturnable<Component> cir) {
-        PreferredGraphicsApi self = (PreferredGraphicsApi) (Object) this;
-        if (self == PreferredGraphicsApi.DEFAULT) {
-            cir.setReturnValue(Component.literal("Prefer Metal"));
-        }
+        cir.setReturnValue(Component.literal("Prefer Metal"));
     }
 }

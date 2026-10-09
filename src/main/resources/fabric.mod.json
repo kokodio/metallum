@@ -20,11 +20,13 @@
       "com.metallum.Metallum"
     ],
     "sodium:config_api_user": [
-      "com.metallum.sodium.MetallumSodiumConfig"
+      "com.metallum.compat.sodium.MetallumSodiumConfig"
     ]
   },
   "mixins": [
-    "metallum.mixins.json"
+    "metallum.mixins.json",
+    "metallum.sodium.mixins.json",
+    "metallum.distanthorizons.mixins.json"
   ],
   "depends": {
     "fabricloader": ">=0.19.2",

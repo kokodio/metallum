@@ -1,4 +1,4 @@
-package com.metallum.sodium;
+package com.metallum.compat.sodium;
 
 import com.metallum.Metallum;
 import com.metallum.MetallumConfig;
