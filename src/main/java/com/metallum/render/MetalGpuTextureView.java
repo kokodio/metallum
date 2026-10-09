@@ -1,7 +1,7 @@
 package com.metallum.render;
 
-import com.metallum.mtl.MTLTexture;
-import com.metallum.mtl.NSRange;
+import io.github.kokodio.metaljvm.metal.MTLTexture;
+import io.github.kokodio.metaljvm.foundation.NSRange;
 import com.mojang.blaze3d.textures.GpuTexture;
 import com.mojang.blaze3d.textures.GpuTextureView;
 import net.fabricmc.api.EnvType;
@@ -29,7 +29,7 @@ final class MetalGpuTextureView extends GpuTextureView {
             } else {
                 boolean validRange = this.mipLevels() > 0 && this.baseMipLevel() + this.mipLevels() <= texture.getMipLevels();
                 MTLTexture view = validRange
-                        ? texture.metalTexture().newTextureView(
+                        ? texture.metalTexture().newTextureViewWithPixelFormat(
                         texture.mtlPixelFormat(),
                         texture.textureType(),
                         new NSRange(this.baseMipLevel(), this.mipLevels()),

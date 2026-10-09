@@ -1,10 +1,10 @@
 package com.metallum.render;
 
-import com.metallum.mtl.MTLBuffer;
-import com.metallum.mtl.MTLHazardTrackingMode;
-import com.metallum.mtl.MTLResourceOptions;
-import com.metallum.mtl.MTLStorageMode;
-import com.metallum.objc.ObjC;
+import io.github.kokodio.metaljvm.metal.MTLBuffer;
+import io.github.kokodio.metaljvm.metal.MTLHazardTrackingMode;
+import io.github.kokodio.metaljvm.metal.MTLResourceOptions;
+import io.github.kokodio.metaljvm.metal.MTLStorageMode;
+import io.github.kokodio.metaljvm.objc.ObjC;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import net.fabricmc.api.EnvType;
@@ -40,9 +40,9 @@ class MetalGpuBuffer extends GpuBuffer {
         this.dynamic = isDynamic(usage);
         this.cpuAccessible = isCpuAccessible(usage) || this.dynamic;
         this.storageMode = this.cpuAccessible ? MTLStorageMode.Shared : MTLStorageMode.Private;
-        this.resourceOptions = MTLResourceOptions.of(this.storageMode, MTLHazardTrackingMode.Untracked);
+        this.resourceOptions = MetalConversions.resourceOptions(this.storageMode, MTLHazardTrackingMode.Untracked);
         this.allocationSize = (size + 15L) & ~15L;
-        this.nativeBuffer = device.metalDevice().newBuffer(this.allocationSize, this.resourceOptions);
+        this.nativeBuffer = MetalUtilities.nonNil(device.metalDevice().newBuffer(this.allocationSize, this.resourceOptions), "newBufferWithLength:options:");
         if (label != null) {
             this.nativeBuffer.setLabel(label);
         }

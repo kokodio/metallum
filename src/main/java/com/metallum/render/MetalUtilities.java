@@ -1,8 +1,11 @@
 package com.metallum.render;
 
-import com.metallum.mtl.*;
-import com.metallum.objc.AutoreleasePool;
-import com.metallum.objc.NSObject;
+import com.metallum.Metallum;
+import io.github.kokodio.metaljvm.metal.*;
+import io.github.kokodio.metaljvm.quartzcore.*;
+import io.github.kokodio.metaljvm.objc.AutoreleasePool;
+import io.github.kokodio.metaljvm.foundation.NSErrorException;
+import io.github.kokodio.metaljvm.foundation.NSObject;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -114,7 +117,7 @@ final class MetalUtilities {
     static void init(final MTLDevice mtlDevice) {
         device = mtlDevice;
         presentPipeline = buildPipeline(PRESENT_MSL, "metallum_present_vs", "metallum_present_fs",
-                MTLPixelFormat.BGRA8Unorm, MTLPixelFormat.Invalid, MTLColorWriteMask.All.value);
+                MTLPixelFormat.BGRA8Unorm, MTLPixelFormat.Invalid, MTLColorWriteMask.All);
         presentLinearSampler = buildPresentSampler(MTLSamplerMinMagFilter.Linear);
         presentNearestSampler = buildPresentSampler(MTLSamplerMinMagFilter.Nearest);
         ensureClearPipeline(MTLPixelFormat.BGRA8Unorm, MTLPixelFormat.Depth32Float, true);
@@ -166,8 +169,8 @@ final class MetalUtilities {
         }
         boolean hasDepth = depthFormat != MTLPixelFormat.Invalid;
 
-        encoder.setViewport(0.0, 0.0, targetWidth, targetHeight, 0.0, 1.0);
-        encoder.setScissorRect(left, top, right - left, bottom - top);
+        encoder.setViewport(new MTLViewport(0.0, 0.0, targetWidth, targetHeight, 0.0, 1.0));
+        encoder.setScissorRect(new MTLScissorRect(left, top, right - left, bottom - top));
         encoder.setRenderPipelineState(pipeline);
         if (hasDepth) {
             encoder.setDepthStencilState(ensureDepthStencilState(MTLCompareFunction.Always, clearDepth != null));
@@ -200,11 +203,11 @@ final class MetalUtilities {
             MTLTexture drawableTexture = drawable.texture();
 
             MTLRenderPassDescriptor renderPass = MTLRenderPassDescriptor.alloc().init();
-            MTLRenderPassColorAttachmentDescriptor attachment = renderPass.colorAttachments().object(0);
+            MTLRenderPassColorAttachmentDescriptor attachment = renderPass.colorAttachments().objectAtIndexedSubscript(0);
             attachment.setTexture(drawableTexture);
             attachment.setLoadAction(MTLLoadAction.DontCare);
             attachment.setStoreAction(MTLStoreAction.Store);
-            MTLRenderCommandEncoder encoder = commandBuffer.renderCommandEncoder(renderPass);
+            MTLRenderCommandEncoder encoder = nonNil(commandBuffer.renderCommandEncoder(renderPass), "renderCommandEncoderWithDescriptor:");
             renderPass.release();
 
             if (globalFence != null) {
@@ -213,7 +216,7 @@ final class MetalUtilities {
 
             long drawableWidth = drawableTexture.width();
             long drawableHeight = drawableTexture.height();
-            encoder.setViewport(0.0, 0.0, drawableWidth, drawableHeight, 0.0, 1.0);
+            encoder.setViewport(new MTLViewport(0.0, 0.0, drawableWidth, drawableHeight, 0.0, 1.0));
             encoder.setRenderPipelineState(presentPipeline);
             encoder.setFragmentTexture(sourceTexture, 0L);
 
@@ -240,7 +243,7 @@ final class MetalUtilities {
             return cached;
         }
         MTLRenderPipelineState pipeline = buildPipeline(CLEAR_MSL, "metallum_clear_vs", "metallum_clear_fs",
-                colorFormat, depthFormat, writeColor ? MTLColorWriteMask.All.value : MTLColorWriteMask.None.value);
+                colorFormat, depthFormat, writeColor ? MTLColorWriteMask.All : MTLColorWriteMask.None);
         if (pipeline != null) {
             clearPipelines.put(key, pipeline);
         }
@@ -256,7 +259,7 @@ final class MetalUtilities {
         MTLDepthStencilDescriptor descriptor = MTLDepthStencilDescriptor.alloc().init();
         descriptor.setDepthCompareFunction(compareOp);
         descriptor.setDepthWriteEnabled(writeDepth);
-        MTLDepthStencilState state = device.newDepthStencilState(descriptor);
+        MTLDepthStencilState state = MetalUtilities.nonNil(device.newDepthStencilState(descriptor), "newDepthStencilStateWithDescriptor:");
         depthStencilStates.put(key, state);
         descriptor.release();
         return state;
@@ -272,12 +275,12 @@ final class MetalUtilities {
             final long writeMask
     ) {
         try (AutoreleasePool _ = AutoreleasePool.push()) {
-            MTLLibrary library = device.newLibrary(mslSource);
+            MTLLibrary library = newLibrary(device, mslSource);
             if (library == null) {
                 return null;
             }
-            MTLFunction vertexFunction = library.newFunction(vertexEntry);
-            MTLFunction fragmentFunction = library.newFunction(fragmentEntry);
+            MTLFunction vertexFunction = library.newFunctionWithName(vertexEntry);
+            MTLFunction fragmentFunction = library.newFunctionWithName(fragmentEntry);
             library.release();
 
             MTLRenderPipelineState pipeline = null;
@@ -286,11 +289,11 @@ final class MetalUtilities {
                 descriptor.setVertexFunction(vertexFunction);
                 descriptor.setFragmentFunction(fragmentFunction);
                 descriptor.setDepthAttachmentPixelFormat(depthFormat);
-                MTLRenderPipelineColorAttachmentDescriptor attachment = descriptor.colorAttachments().object(0);
+                MTLRenderPipelineColorAttachmentDescriptor attachment = descriptor.colorAttachments().objectAtIndexedSubscript(0);
                 attachment.setPixelFormat(colorFormat);
                 attachment.setBlendingEnabled(false);
                 attachment.setWriteMask(writeMask);
-                pipeline = device.newRenderPipelineState(descriptor);
+                pipeline = newRenderPipelineState(device, descriptor);
                 descriptor.release();
             }
             if (vertexFunction != null) {
@@ -310,7 +313,7 @@ final class MetalUtilities {
         descriptor.setMipFilter(MTLSamplerMipFilter.NotMipmapped);
         descriptor.setSAddressMode(MTLSamplerAddressMode.ClampToEdge);
         descriptor.setTAddressMode(MTLSamplerAddressMode.ClampToEdge);
-        MTLSamplerState result = device.newSamplerState(descriptor);
+        MTLSamplerState result = MetalUtilities.nonNil(device.newSamplerState(descriptor), "newSamplerStateWithDescriptor:");
         descriptor.release();
         return result;
     }
@@ -332,7 +335,7 @@ final class MetalUtilities {
         if (offset > bufferLength || bytesPerRow > bufferLength - offset) {
             return null;
         }
-        long alignment = device.minimumTextureBufferAlignment(pixelFormat);
+        long alignment = device.minimumTextureBufferAlignmentForPixelFormat(pixelFormat);
         if (alignment <= 0 || offset % alignment != 0) {
             return null;
         }
@@ -340,7 +343,7 @@ final class MetalUtilities {
         long alignedBytesPerRow = remainder == 0 ? bytesPerRow : bytesPerRow + alignment - remainder;
 
         try (AutoreleasePool _ = AutoreleasePool.push()) {
-            MTLTextureDescriptor descriptor = MTLTextureDescriptor.textureBufferDescriptor(pixelFormat, width, 0L, MTLTextureUsage.ShaderRead.value);
+            MTLTextureDescriptor descriptor = MTLTextureDescriptor.textureBufferDescriptor(pixelFormat, width, 0L, MTLTextureUsage.ShaderRead);
             descriptor.setStorageMode(storageMode);
             descriptor.setHazardTrackingMode(MTLHazardTrackingMode.Untracked);
             return buffer.newTexture(descriptor, offset, alignedBytesPerRow);
@@ -348,8 +351,8 @@ final class MetalUtilities {
     }
 
     static boolean sameHandle(@Nullable final NSObject left, @Nullable final NSObject right) {
-        long leftValue = left == null ? 0L : left.handle().address();
-        long rightValue = right == null ? 0L : right.handle().address();
+        long leftValue = left == null ? 0L : left.handle();
+        long rightValue = right == null ? 0L : right.handle();
         return leftValue == rightValue;
     }
 
@@ -363,5 +366,32 @@ final class MetalUtilities {
             }
         }
         return names;
+    }
+
+    static <T> T nonNil(@Nullable final T object, final String selector) {
+        if (object == null) {
+            throw new IllegalStateException(selector + " returned nil");
+        }
+        return object;
+    }
+
+    @Nullable
+    static MTLLibrary newLibrary(final MTLDevice device, final String source) {
+        try (AutoreleasePool _ = AutoreleasePool.push()) {
+            return device.newLibraryWithSource(source, null);
+        } catch (NSErrorException exception) {
+            Metallum.LOGGER.error("[metallum] Failed to compile MSL: {}", exception.getMessage());
+            return null;
+        }
+    }
+
+    @Nullable
+    static MTLRenderPipelineState newRenderPipelineState(final MTLDevice device, final MTLRenderPipelineDescriptor descriptor) {
+        try (AutoreleasePool _ = AutoreleasePool.push()) {
+            return device.newRenderPipelineState(descriptor);
+        } catch (NSErrorException exception) {
+            Metallum.LOGGER.error("[metallum] Failed to create render pipeline state: {}", exception.getMessage());
+            return null;
+        }
     }
 }

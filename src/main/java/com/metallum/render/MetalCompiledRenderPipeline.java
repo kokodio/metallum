@@ -1,8 +1,8 @@
 package com.metallum.render;
 
 import com.metallum.Metallum;
-import com.metallum.mtl.*;
-import com.metallum.objc.AutoreleasePool;
+import io.github.kokodio.metaljvm.metal.*;
+import io.github.kokodio.metaljvm.objc.AutoreleasePool;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.pipeline.BlendFunction;
 import com.mojang.blaze3d.pipeline.ColorTargetState;
@@ -44,6 +44,7 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
     private final float depthBiasScaleFactor;
     private final float depthBiasConstant;
     private final MTLPrimitiveType topology;
+    private final boolean triangleFan;
     private final int vertexBufferCount;
 
     private final MTLDepthStencilState depthStencilState;
@@ -78,7 +79,8 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
         this.firstAvailableVertexBufferSlot = firstAvailableVertexBufferSlot(resources);
         this.cullMode = info.isCull() ? MTLCullMode.Back : MTLCullMode.None;
         this.fillMode = info.getPolygonMode() == PolygonMode.WIREFRAME ? MTLTriangleFillMode.Lines : MTLTriangleFillMode.Fill;
-        this.topology = MTLPrimitiveType.from(info.getPrimitiveTopology());
+        this.topology = MetalConversions.primitiveType(info.getPrimitiveTopology());
+        this.triangleFan = info.getPrimitiveTopology() == com.mojang.blaze3d.PrimitiveTopology.TRIANGLE_FAN;
         this.vertexBufferCount = info.getVertexFormatBindings().length;
 
         MTLCompareFunction depthCompareOp;
@@ -90,7 +92,7 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
             this.depthBiasScaleFactor = 0.0f;
             this.depthBiasConstant = 0.0f;
         } else {
-            depthCompareOp = MTLCompareFunction.from(depthStencilState.depthTest());
+            depthCompareOp = MetalConversions.compareFunction(depthStencilState.depthTest());
             depthWrite = depthStencilState.writeDepth() ? 1 : 0;
             this.depthBiasScaleFactor = depthStencilState.depthBiasScaleFactor();
             this.depthBiasConstant = depthStencilState.depthBiasConstant();
@@ -99,7 +101,7 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
         this.depthStencilState = device.depthStencilState(depthCompareOp, depthWrite != 0);
 
         var colorTarget = info.getColorTargetState();
-        MTLPixelFormat colorFormat = colorTarget != null ? MTLPixelFormat.from(colorTarget.format()) : MTLPixelFormat.RGBA8Unorm;
+        MTLPixelFormat colorFormat = colorTarget != null ? MetalConversions.pixelFormat(colorTarget.format()) : MTLPixelFormat.RGBA8Unorm;
 
         MTLFunction vertexFunction = device.getOrCompileFunction(vertexMsl, vertexEntryPoint, info.getVertexShader().toDebugFileName());
         MTLFunction fragmentFunction = device.getOrCompileFunction(fragmentMsl, fragmentEntryPoint, info.getFragmentShader().toDebugFileName());
@@ -126,7 +128,7 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
 
         ColorTargetState colorTarget = info.getColorTargetState();
         Optional<BlendFunction> blendFunction = colorTarget == null ? Optional.empty() : colorTarget.blendFunction();
-        long writeMask = colorTarget == null ? MTLColorWriteMask.All.value : MTLColorWriteMask.from(colorTarget.writeMask());
+        long writeMask = colorTarget == null ? MTLColorWriteMask.All : MetalConversions.colorWriteMask(colorTarget.writeMask());
 
         try (AutoreleasePool _ = AutoreleasePool.push()) {
             MTLRenderPipelineDescriptor pipelineDesc = MTLRenderPipelineDescriptor.alloc().init();
@@ -138,21 +140,21 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
             pipelineDesc.setVertexDescriptor(vertexDescriptor);
             pipelineDesc.setDepthAttachmentPixelFormat(depthFormat);
 
-            MTLRenderPipelineColorAttachmentDescriptor colorAttachment = pipelineDesc.colorAttachments().object(0);
+            MTLRenderPipelineColorAttachmentDescriptor colorAttachment = pipelineDesc.colorAttachments().objectAtIndexedSubscript(0);
             colorAttachment.setPixelFormat(colorFormat);
             colorAttachment.setWriteMask(writeMask);
             colorAttachment.setBlendingEnabled(blendFunction.isPresent());
             if (blendFunction.isPresent()) {
                 var function = blendFunction.get();
-                colorAttachment.setSourceRGBBlendFactor(MTLBlendFactor.from(function.color().sourceFactor()));
-                colorAttachment.setDestinationRGBBlendFactor(MTLBlendFactor.from(function.color().destFactor()));
-                colorAttachment.setRgbBlendOperation(MTLBlendOperation.from(function.color().op()));
-                colorAttachment.setSourceAlphaBlendFactor(MTLBlendFactor.from(function.alpha().sourceFactor()));
-                colorAttachment.setDestinationAlphaBlendFactor(MTLBlendFactor.from(function.alpha().destFactor()));
-                colorAttachment.setAlphaBlendOperation(MTLBlendOperation.from(function.alpha().op()));
+                colorAttachment.setSourceRGBBlendFactor(MetalConversions.blendFactor(function.color().sourceFactor()));
+                colorAttachment.setDestinationRGBBlendFactor(MetalConversions.blendFactor(function.color().destFactor()));
+                colorAttachment.setRgbBlendOperation(MetalConversions.blendOperation(function.color().op()));
+                colorAttachment.setSourceAlphaBlendFactor(MetalConversions.blendFactor(function.alpha().sourceFactor()));
+                colorAttachment.setDestinationAlphaBlendFactor(MetalConversions.blendFactor(function.alpha().destFactor()));
+                colorAttachment.setAlphaBlendOperation(MetalConversions.blendOperation(function.alpha().op()));
             }
 
-            MTLRenderPipelineState pipeline = device.metalDevice().newRenderPipelineState(pipelineDesc);
+            MTLRenderPipelineState pipeline = MetalUtilities.newRenderPipelineState(device.metalDevice(), pipelineDesc);
             if (pipeline == null) {
                 Metallum.LOGGER.error("[metallum] Pipeline {} failed to build with depth format {}", info.getLocation(), depthFormat);
             }
@@ -212,6 +214,10 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
         return this.topology;
     }
 
+    boolean triangleFan() {
+        return this.triangleFan;
+    }
+
     int vertexBufferCount() {
         return this.vertexBufferCount;
     }
@@ -236,17 +242,17 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
                 long stride = binding.getVertexSize();
                 long stepRate = binding.getStepRate();
                 MTLVertexStepFunction stepFunction = stepRate > 0 ? MTLVertexStepFunction.PerInstance : MTLVertexStepFunction.PerVertex;
-                MTLVertexBufferLayoutDescriptor layout = vertexDesc.layouts().object(metalSlot);
+                MTLVertexBufferLayoutDescriptor layout = vertexDesc.layouts().objectAtIndexedSubscript(metalSlot);
                 layout.setStride(stride);
                 layout.setStepFunction(stepFunction);
                 layout.setStepRate(stepRate > 0 ? stepRate : 1);
 
                 for (VertexFormatElement element : binding.getElements()) {
-                    MTLVertexFormat format = MTLVertexFormat.from(element.format());
+                    MTLVertexFormat format = MetalConversions.vertexFormat(element.format());
                     if (format == MTLVertexFormat.Invalid) {
                         throw new IllegalStateException("Unsupported vertex attribute format: " + element.format());
                     }
-                    MTLVertexAttributeDescriptor attribute = vertexDesc.attributes().object(attrIndex);
+                    MTLVertexAttributeDescriptor attribute = vertexDesc.attributes().objectAtIndexedSubscript(attrIndex);
                     attribute.setFormat(format);
                     attribute.setOffset(element.offset());
                     attribute.setBufferIndex(metalSlot);

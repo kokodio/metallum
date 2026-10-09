@@ -1,6 +1,6 @@
 package com.metallum.render;
 
-import com.metallum.mtl.*;
+import io.github.kokodio.metaljvm.metal.*;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.textures.GpuTexture;
 import net.fabricmc.api.EnvType;
@@ -37,7 +37,7 @@ final class MetalGpuTexture extends GpuTexture {
     ) {
         super(usage, label, format, width, height, depthOrLayers, mipLevels);
         this.device = device;
-        this.mtlPixelFormat = MTLPixelFormat.from(format);
+        this.mtlPixelFormat = MetalConversions.pixelFormat(format);
 
         MTLTextureDescriptor descriptor = MTLTextureDescriptor.alloc().init();
         descriptor.setPixelFormat(this.mtlPixelFormat);
@@ -61,7 +61,7 @@ final class MetalGpuTexture extends GpuTexture {
         descriptor.setUsage(toMtlTextureUsage(usage));
         descriptor.setStorageMode(MTLStorageMode.Private);
         descriptor.setHazardTrackingMode(MTLHazardTrackingMode.Untracked);
-        this.metalTexture = device.metalDevice().newTexture(descriptor);
+        this.metalTexture = MetalUtilities.nonNil(device.metalDevice().newTexture(descriptor), "newTextureWithDescriptor:");
         descriptor.release();
         if (!label.isEmpty()) {
             this.metalTexture.setLabel(label);
@@ -147,12 +147,12 @@ final class MetalGpuTexture extends GpuTexture {
     private static long toMtlTextureUsage(@GpuTexture.Usage final int usage) {
         long result = 0L;
         if ((usage & GpuTexture.USAGE_TEXTURE_BINDING) != 0 || (usage & GpuTexture.USAGE_COPY_DST) != 0 || (usage & GpuTexture.USAGE_COPY_SRC) != 0) {
-            result |= MTLTextureUsage.ShaderRead.value;
+            result |= MTLTextureUsage.ShaderRead;
         }
         if ((usage & GpuTexture.USAGE_RENDER_ATTACHMENT) != 0) {
-            result |= MTLTextureUsage.RenderTarget.value;
-            result |= MTLTextureUsage.ShaderRead.value;
+            result |= MTLTextureUsage.RenderTarget;
+            result |= MTLTextureUsage.ShaderRead;
         }
-        return result == 0L ? MTLTextureUsage.ShaderRead.value : result;
+        return result == 0L ? MTLTextureUsage.ShaderRead : result;
     }
 }

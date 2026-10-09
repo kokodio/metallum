@@ -1,6 +1,6 @@
 package com.metallum.render;
 
-import com.metallum.mtl.*;
+import io.github.kokodio.metaljvm.metal.*;
 import com.mojang.blaze3d.textures.AddressMode;
 import com.mojang.blaze3d.textures.FilterMode;
 import com.mojang.blaze3d.textures.GpuSampler;
@@ -33,16 +33,16 @@ final class MetalGpuSampler extends GpuSampler {
     ) {
         this.device = device;
         MTLSamplerDescriptor descriptor = MTLSamplerDescriptor.alloc().init();
-        descriptor.setMinFilter(MTLSamplerMinMagFilter.from(minFilter));
-        descriptor.setMagFilter(MTLSamplerMinMagFilter.from(magFilter));
+        descriptor.setMinFilter(MetalConversions.minMagFilter(minFilter));
+        descriptor.setMagFilter(MetalConversions.minMagFilter(magFilter));
         descriptor.setMipFilter(toMtlMipFilter(maxLod));
-        descriptor.setSAddressMode(MTLSamplerAddressMode.from(addressModeU));
-        descriptor.setTAddressMode(MTLSamplerAddressMode.from(addressModeV));
+        descriptor.setSAddressMode(MetalConversions.addressMode(addressModeU));
+        descriptor.setTAddressMode(MetalConversions.addressMode(addressModeV));
         descriptor.setMaxAnisotropy(Math.max(1, maxAnisotropy));
         descriptor.setLodMinClamp(0.0f);
         double lodMaxClamp = toMtlMaxLodClamp(maxLod);
         descriptor.setLodMaxClamp(lodMaxClamp >= 0.0 && Double.isFinite(lodMaxClamp) ? (float) lodMaxClamp : Float.MAX_VALUE);
-        this.metalSampler = device.metalDevice().newSamplerState(descriptor);
+        this.metalSampler = MetalUtilities.nonNil(device.metalDevice().newSamplerState(descriptor), "newSamplerStateWithDescriptor:");
         descriptor.release();
         this.addressModeU = addressModeU;
         this.addressModeV = addressModeV;

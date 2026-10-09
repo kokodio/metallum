@@ -19,6 +19,8 @@ dependencies {
 	
 	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	implementation "maven.modrinth:sodium:${project.sodium_version}"
+
+	include(implementation("io.github.kokodio:metal-jvm:${project.metal_jvm_version}"))
 }
 
 processResources {

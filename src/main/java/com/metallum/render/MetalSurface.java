@@ -1,7 +1,8 @@
 package com.metallum.render;
 
-import com.metallum.mtl.CAMetalLayer;
-import com.metallum.mtl.MTLPixelFormat;
+import io.github.kokodio.metaljvm.coregraphics.CGSize;
+import io.github.kokodio.metaljvm.quartzcore.CAMetalLayer;
+import io.github.kokodio.metaljvm.metal.MTLPixelFormat;
 import com.mojang.blaze3d.systems.CommandEncoderBackend;
 import com.mojang.blaze3d.systems.GpuSurface;
 import com.mojang.blaze3d.systems.GpuSurfaceBackend;
@@ -32,7 +33,7 @@ final class MetalSurface implements GpuSurfaceBackend {
         }
 
         this.metalLayer.setPixelFormat(MTLPixelFormat.BGRA8Unorm);
-        this.metalLayer.setDrawableSize(config.width(), config.height());
+        this.metalLayer.setDrawableSize(new CGSize(config.width(), config.height()));
         this.metalLayer.setAllowsNextDrawableTimeout(false);
         this.metalLayer.setPresentsWithTransaction(false);
         this.metalLayer.setDisplaySyncEnabled(config.presentMode() != GpuSurface.PresentMode.MAILBOX);

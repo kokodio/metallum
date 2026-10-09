@@ -1,8 +1,9 @@
 package com.metallum.render;
 
 import com.metallum.Metallum;
-import com.metallum.mtl.*;
-import com.metallum.objc.NSObject;
+import io.github.kokodio.metaljvm.metal.*;
+import io.github.kokodio.metaljvm.quartzcore.*;
+import io.github.kokodio.metaljvm.foundation.NSObject;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
@@ -55,7 +56,7 @@ final class MetalDevice implements GpuDeviceBackend {
         this.debugOptions = debugOptions;
         this.metalDevice = metalDevice;
         this.metalLayer = metalLayer;
-        this.commandQueue = this.metalDevice.newCommandQueue();
+        this.commandQueue = MetalUtilities.nonNil(this.metalDevice.newCommandQueue(), "newCommandQueue");
         MetalUtilities.init(this.metalDevice);
         this.commandEncoder = new MetalCommandEncoder(this);
         this.deviceInfo = buildDeviceInfo(deviceName);
@@ -172,7 +173,7 @@ final class MetalDevice implements GpuDeviceBackend {
         this.commandEncoder.close();
         this.clearPipelineCache();
         MetalUtilities.close();
-        this.commandQueue.close();
+        this.commandQueue.release();
         for (MTLDepthStencilState state : depthStencilStates.values()) {
             state.release();
         }
@@ -208,7 +209,7 @@ final class MetalDevice implements GpuDeviceBackend {
         MTLDepthStencilDescriptor descriptor = MTLDepthStencilDescriptor.alloc().init();
         descriptor.setDepthCompareFunction(compareFunction);
         descriptor.setDepthWriteEnabled(writeDepth);
-        MTLDepthStencilState state = metalDevice.newDepthStencilState(descriptor);
+        MTLDepthStencilState state = MetalUtilities.nonNil(metalDevice.newDepthStencilState(descriptor), "newDepthStencilStateWithDescriptor:");
         depthStencilStates.put(key, state);
         descriptor.release();
         return state;
@@ -255,12 +256,12 @@ final class MetalDevice implements GpuDeviceBackend {
 
     @Nullable
     private MTLFunction compileFunction(final MslFunctionKey key, final String name) {
-        MTLLibrary library = this.metalDevice.newLibrary(key.msl());
+        MTLLibrary library = MetalUtilities.newLibrary(this.metalDevice, key.msl());
         if (library == null) {
             return null;
         }
 
-        MTLFunction function = library.newFunction(key.entryPoint());
+        MTLFunction function = library.newFunctionWithName(key.entryPoint());
         library.release();
         if (function == null) {
             Metallum.LOGGER.error("[metallum] Failed to resolve MSL entry point '{}'", key.entryPoint());

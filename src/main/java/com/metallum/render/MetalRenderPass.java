@@ -1,6 +1,6 @@
 package com.metallum.render;
 
-import com.metallum.mtl.*;
+import io.github.kokodio.metaljvm.metal.*;
 import com.mojang.blaze3d.GpuFormat;
 import com.mojang.blaze3d.IndexType;
 import com.mojang.blaze3d.buffers.GpuBuffer;
@@ -172,7 +172,7 @@ final class MetalRenderPass implements RenderPassBackend {
 
     @Override
     public void setIndexBuffer(@Nullable final GpuBuffer indexBuffer, final @NonNull IndexType indexType) {
-        setIndexBuffer(indexBuffer, MTLIndexType.from(indexType));
+        setIndexBuffer(indexBuffer, MetalConversions.indexType(indexType));
     }
 
     private void setIndexBuffer(@Nullable final GpuBuffer indexBuffer, final MTLIndexType indexType) {
@@ -210,7 +210,7 @@ final class MetalRenderPass implements RenderPassBackend {
     @Override
     public void multiDrawIndexed(@NonNull PointerBuffer firstIndexOffsets, @NonNull IntBuffer indexCounts, @NonNull IntBuffer vertexOffsets, int drawCount) {
         MTLPrimitiveType primitiveType = primitiveTopology();
-        if (primitiveType == MTLPrimitiveType.TriangleFan) {
+        if (isTriangleFan()) {
             throw new UnsupportedOperationException("Metal backend does not support triangle fan multiDrawIndexed");
         }
 
@@ -236,7 +236,7 @@ final class MetalRenderPass implements RenderPassBackend {
     @Override
     public void drawIndexedIndirect(final @NonNull GpuBufferSlice commands, final int drawCount) {
         MTLPrimitiveType primitiveType = primitiveTopology();
-        if (primitiveType == MTLPrimitiveType.TriangleFan) {
+        if (isTriangleFan()) {
             throw new UnsupportedOperationException("Metal backend does not support triangle fan indirect draws");
         }
 
@@ -264,7 +264,7 @@ final class MetalRenderPass implements RenderPassBackend {
         IndexType fallbackIndexType = defaultIndexType == null ? IndexType.SHORT : defaultIndexType;
 
         for (RenderPass.Draw<T> draw : draws) {
-            MTLIndexType drawIndexType = MTLIndexType.from(draw.indexType() == null ? fallbackIndexType : draw.indexType());
+            MTLIndexType drawIndexType = MetalConversions.indexType(draw.indexType() == null ? fallbackIndexType : draw.indexType());
             GpuBuffer currentIndexBuffer = draw.indexBuffer() == null ? defaultIndexBuffer : draw.indexBuffer();
 
             setIndexBuffer(currentIndexBuffer, drawIndexType);
@@ -290,7 +290,7 @@ final class MetalRenderPass implements RenderPassBackend {
 
         bindDrawState(enc);
 
-        if (primitiveType == MTLPrimitiveType.TriangleFan) {
+        if (isTriangleFan()) {
             drawTriangleFan(enc, firstVertex, vertexCount, instanceCount, firstInstance);
         } else {
             enc.drawPrimitives(primitiveType, firstVertex, vertexCount, instanceCount, firstInstance);
@@ -310,7 +310,7 @@ final class MetalRenderPass implements RenderPassBackend {
     @Override
     public void drawIndirect(final @NonNull GpuBufferSlice commands, final int drawCount) {
         MTLPrimitiveType primitiveType = primitiveTopology();
-        if (primitiveType == MTLPrimitiveType.TriangleFan) {
+        if (isTriangleFan()) {
             throw new UnsupportedOperationException("Metal backend does not support triangle fan indirect draws");
         }
 
@@ -399,7 +399,7 @@ final class MetalRenderPass implements RenderPassBackend {
         int indexCount = triangleCount * 3;
         MTLIndexType fanIndexType = vertexCount - 1 <= 0xFFFF ? MTLIndexType.UInt16 : MTLIndexType.UInt32;
 
-        try (GpuBufferSlice.MappedView mapped = commandEncoder.transientMemory().allocateGpuMapped((long) indexCount * fanIndexType.bytes, fanIndexType.bytes, GpuBuffer.USAGE_INDEX)) {
+        try (GpuBufferSlice.MappedView mapped = commandEncoder.transientMemory().allocateGpuMapped((long) indexCount * MetalConversions.bytes(fanIndexType), MetalConversions.bytes(fanIndexType), GpuBuffer.USAGE_INDEX)) {
             if (fanIndexType == MTLIndexType.UInt16) {
                 ShortBuffer indices = mapped.data().asShortBuffer();
                 for (int i = 0; i < triangleCount; i++) {
@@ -432,8 +432,8 @@ final class MetalRenderPass implements RenderPassBackend {
     ) {
         MTLPrimitiveType primitiveType = primitiveTopology();
 
-        long indexOffsetBytes = (long) firstIndex * indexType.bytes;
-        if (primitiveType == MTLPrimitiveType.TriangleFan) {
+        long indexOffsetBytes = (long) firstIndex * MetalConversions.bytes(indexType);
+        if (isTriangleFan()) {
             if (indexCount < 3) {
                 return;
             }
@@ -450,7 +450,7 @@ final class MetalRenderPass implements RenderPassBackend {
 
     private static void expandTriangleFan(final IntBuffer out, final MTLBuffer indexBuffer, final long indexOffsetBytes, final int indexCount, final MTLIndexType indexType) {
         MemorySegment indices = indexBuffer.contents()
-                .reinterpret(indexOffsetBytes + (long) indexCount * indexType.bytes)
+                .reinterpret(indexOffsetBytes + (long) indexCount * MetalConversions.bytes(indexType))
                 .asSlice(indexOffsetBytes);
         int center = readIndex(indices, 0, indexType);
         for (int i = 1; i < indexCount - 1; i++) {
@@ -552,15 +552,19 @@ final class MetalRenderPass implements RenderPassBackend {
         return compiledPipeline.topology();
     }
 
+    private boolean isTriangleFan() {
+        return compiledPipeline != null && compiledPipeline.triangleFan();
+    }
+
     private void pushEffectiveScissor(final MTLRenderCommandEncoder enc) {
         int areaLeft = renderArea.x();
         int areaTop = renderArea.y();
         if (!scissorState.enabled()) {
             if (renderArea.fillsTexture(colorTexture)) {
-                enc.setScissorRect(0L, 0L, colorTexture.getWidth(0), colorTexture.getHeight(0));
+                enc.setScissorRect(new MTLScissorRect(0L, 0L, colorTexture.getWidth(0), colorTexture.getHeight(0)));
                 return;
             }
-            enc.setScissorRect(areaLeft, areaTop, renderArea.width(), renderArea.height());
+            enc.setScissorRect(new MTLScissorRect(areaLeft, areaTop, renderArea.width(), renderArea.height()));
             return;
         }
 
@@ -571,9 +575,9 @@ final class MetalRenderPass implements RenderPassBackend {
         int right = Math.min(areaRight, scissorState.x() + scissorState.width());
         int bottom = Math.min(areaBottom, scissorState.y() + scissorState.height());
         if (right <= left || bottom <= top) {
-            enc.setScissorRect(0, 0, 0, 0);
+            enc.setScissorRect(new MTLScissorRect(0, 0, 0, 0));
         } else {
-            enc.setScissorRect(left, top, right - left, bottom - top);
+            enc.setScissorRect(new MTLScissorRect(left, top, right - left, bottom - top));
         }
     }
 
@@ -634,7 +638,7 @@ final class MetalRenderPass implements RenderPassBackend {
         }
 
         MetalGpuBuffer texelBuffer = (MetalGpuBuffer) texelSlice.buffer();
-        MTLPixelFormat pixelFormat = MTLPixelFormat.from(texelFormat);
+        MTLPixelFormat pixelFormat = MetalConversions.pixelFormat(texelFormat);
         int pixelSize = texelFormat.blockSize();
         long texelByteLength = texelSlice.length();
         if (texelByteLength <= 0L || texelByteLength % pixelSize != 0L) {
