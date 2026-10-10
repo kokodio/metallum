@@ -1,11 +1,16 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.buffers.GpuBuffer;
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.buffers.GpuFence;
-import com.mojang.blaze3d.systems.*;
-import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.commands.GpuFence;
+import com.mojang.renderpearl.api.buffers.TransientMemory;
+import com.mojang.renderpearl.api.commands.GpuQueryPool;
+import com.mojang.renderpearl.api.commands.RenderPass;
+import com.mojang.renderpearl.api.commands.RenderPassDescriptor;
+import com.mojang.renderpearl.backend.api.CommandEncoderBackend;
+import com.mojang.renderpearl.backend.api.RenderPassBackend;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.api.textures.GpuTextureView;
 import io.github.kokodio.metaljvm.metal.*;
 import io.github.kokodio.metaljvm.objc.AutoreleasePool;
 import io.github.kokodio.metaljvm.objc.ObjC;
@@ -165,10 +170,10 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
         }
 
         if (!clear || fullArea) {
-            return beginRenderEncoder(colorAttachments, clearColors, depthAttachment, clearDepth, viewportWidth, viewportHeight);
+            return beginRenderEncoder(colorAttachments, clearColors, depthAttachment, clearDepth, viewportWidth, viewportHeight, 0);
         }
 
-        MTLRenderCommandEncoder enc = beginRenderEncoder(colorAttachments, null, depthAttachment, null, viewportWidth, viewportHeight);
+        MTLRenderCommandEncoder enc = beginRenderEncoder(colorAttachments, null, depthAttachment, null, viewportWidth, viewportHeight, 0);
         MetalUtilities.clearDraw(enc, colorFormats, depthFormat, viewportWidth, viewportHeight, clearColors, clearDepth, renderArea);
         return enc;
     }
@@ -191,7 +196,8 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
             @Nullable final MTLTexture depthAttachment,
             @Nullable final Double clearDepth,
             final int viewportWidth,
-            final int viewportHeight
+            final int viewportHeight,
+            final int level
     ) {
         endEncoder();
         MTLRenderCommandEncoder encoder = renderCommandEncoder(
@@ -201,7 +207,7 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
                 clearDepth,
                 viewportWidth,
                 viewportHeight,
-                0
+                level
         );
         encoder.waitForFence(fence, MTLRenderStages.Vertex | MTLRenderStages.Fragment);
         currentEncoder = encoder;
@@ -265,8 +271,7 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
     public @NonNull RenderPassBackend createRenderPass(final RenderPassDescriptor descriptor) {
         List<RenderPassDescriptor.Attachment<Optional<Vector4fc>>> colorAttachments = descriptor.colorAttachments();
 
-        assert descriptor.renderArea != null;
-        RenderPass.RenderArea renderArea = descriptor.renderArea;
+        RenderPass.RenderArea renderArea = descriptor.renderArea();
         RenderPassDescriptor.Attachment<OptionalDouble> depthAttachment = descriptor.depthAttachment();
         boolean fullArea = renderArea.fillsTexture(colorAttachments.isEmpty() ? depthAttachment.textureView() : colorAttachments.getFirst().textureView());
 
@@ -363,11 +368,12 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
             final int regionX,
             final int regionY,
             final int regionWidth,
-            final int regionHeight
+            final int regionHeight,
+            final int mipLevel
     ) {
         MetalGpuTexture color = (MetalGpuTexture) colorTexture;
         MetalGpuTexture depth = (MetalGpuTexture) depthTexture;
-        if (isFullTextureRegion(color, depth, regionX, regionY, regionWidth, regionHeight)) {
+        if (color.getMipLevels() == 1 && isFullTextureRegion(color, depth, regionX, regionY, regionWidth, regionHeight)) {
             pendingColorClears.put(color, new Vector4f(clearColor));
             pendingDepthClears.put(depth, clearDepth);
             return;
@@ -379,9 +385,9 @@ final class MetalCommandEncoder implements CommandEncoderBackend {
         color.markContentsDirty();
         depth.markContentsDirty();
 
-        int width = color.getWidth(0);
-        int height = color.getHeight(0);
-        MTLRenderCommandEncoder encoder = beginRenderEncoder(new MTLTexture[]{color.metalTexture()}, null, depth.metalTexture(), null, width, height);
+        int width = color.getWidth(mipLevel);
+        int height = color.getHeight(mipLevel);
+        MTLRenderCommandEncoder encoder = beginRenderEncoder(new MTLTexture[]{color.metalTexture()}, null, depth.metalTexture(), null, width, height, mipLevel);
 
         RenderPass.RenderArea region = new RenderPass.RenderArea(regionX, regionY, regionWidth, regionHeight);
         MetalUtilities.clearDraw(encoder, new MTLPixelFormat[]{color.mtlPixelFormat()}, depth.mtlPixelFormat(), width, height, new Vector4fc[]{clearColor}, clearDepth, region);

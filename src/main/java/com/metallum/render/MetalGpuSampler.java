@@ -1,8 +1,8 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.textures.AddressMode;
-import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.textures.GpuSampler;
+import com.mojang.renderpearl.api.textures.AddressMode;
+import com.mojang.renderpearl.api.textures.FilterMode;
+import com.mojang.renderpearl.api.textures.GpuSampler;
 import io.github.kokodio.metaljvm.metal.MTLSamplerDescriptor;
 import io.github.kokodio.metaljvm.metal.MTLSamplerMipFilter;
 import io.github.kokodio.metaljvm.metal.MTLSamplerState;
@@ -13,7 +13,7 @@ import org.jspecify.annotations.NonNull;
 import java.util.OptionalDouble;
 
 @Environment(EnvType.CLIENT)
-final class MetalGpuSampler extends GpuSampler {
+final class MetalGpuSampler implements GpuSampler {
     private final MetalDevice device;
     private final MTLSamplerState metalSampler;
     private final AddressMode addressModeU;
@@ -93,7 +93,8 @@ final class MetalGpuSampler extends GpuSampler {
         this.device.queueResourceRelease(this.metalSampler);
     }
 
-    boolean isClosed() {
+    @Override
+    public boolean isClosed() {
         return this.closed;
     }
 

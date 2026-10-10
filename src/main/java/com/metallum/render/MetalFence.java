@@ -1,6 +1,6 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.buffers.GpuFence;
+import com.mojang.renderpearl.api.commands.GpuFence;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 
@@ -22,6 +22,6 @@ final class MetalFence implements GpuFence {
 
     @Override
     public boolean awaitCompletion(final long timeoutNS) {
-        return this.closed || this.encoder.awaitSubmitCompletion(this.submitIndex, timeoutNS / 1_000_000);
+        return this.closed || this.encoder.awaitSubmitCompletion(this.submitIndex, timeoutNS < 0L ? Long.MAX_VALUE : timeoutNS / 1_000_000);
     }
 }

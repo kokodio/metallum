@@ -1,7 +1,8 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.GpuFormat;
-import com.mojang.blaze3d.textures.GpuTexture;
+import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.backend.common.BaseGpuTexture;
 import io.github.kokodio.metaljvm.metal.*;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -10,7 +11,7 @@ import org.jspecify.annotations.Nullable;
 
 
 @Environment(EnvType.CLIENT)
-final class MetalGpuTexture extends GpuTexture {
+final class MetalGpuTexture extends BaseGpuTexture {
 
     private final MetalDevice device;
     private final MTLPixelFormat mtlPixelFormat;

@@ -1,7 +1,7 @@
 package com.metallum.mixin;
 
 import com.metallum.render.MetalBackend;
-import com.mojang.blaze3d.systems.GpuBackend;
+import com.mojang.renderpearl.api.device.GpuBackend;
 import net.minecraft.client.PreferredGraphicsApi;
 import net.minecraft.network.chat.Component;
 import org.spongepowered.asm.mixin.Mixin;

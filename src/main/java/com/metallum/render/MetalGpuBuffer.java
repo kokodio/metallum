@@ -1,7 +1,8 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.buffers.GpuBuffer;
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBufferSlice;
+import com.mojang.renderpearl.backend.common.BaseGpuBuffer;
 import io.github.kokodio.metaljvm.metal.MTLBuffer;
 import io.github.kokodio.metaljvm.metal.MTLHazardTrackingMode;
 import io.github.kokodio.metaljvm.metal.MTLStorageMode;
@@ -16,7 +17,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
 @Environment(EnvType.CLIENT)
-class MetalGpuBuffer extends GpuBuffer {
+class MetalGpuBuffer extends BaseGpuBuffer {
     private final MetalDevice device;
     private final boolean cpuAccessible;
     private final boolean dynamic;

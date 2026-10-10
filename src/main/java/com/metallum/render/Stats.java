@@ -1,7 +1,7 @@
 package com.metallum.render;
 
 import com.metallum.Metallum;
-import com.mojang.blaze3d.buffers.GpuBuffer;
+import com.mojang.renderpearl.api.buffers.GpuBuffer;
 
 import java.util.ArrayList;
 import java.util.List;

@@ -1,7 +1,7 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.textures.GpuTexture;
-import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.renderpearl.api.textures.GpuTexture;
+import com.mojang.renderpearl.backend.common.BaseGpuTextureView;
 import io.github.kokodio.metaljvm.foundation.NSRange;
 import io.github.kokodio.metaljvm.metal.MTLTexture;
 import net.fabricmc.api.EnvType;
@@ -10,7 +10,7 @@ import org.jspecify.annotations.Nullable;
 
 
 @Environment(EnvType.CLIENT)
-final class MetalGpuTextureView extends GpuTextureView {
+final class MetalGpuTextureView extends BaseGpuTextureView {
     private boolean closed;
     @Nullable
     private MTLTexture metalTexture;

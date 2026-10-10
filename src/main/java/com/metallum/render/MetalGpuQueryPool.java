@@ -1,6 +1,6 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.systems.GpuQueryPool;
+import com.mojang.renderpearl.api.commands.GpuQueryPool;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
 import org.jspecify.annotations.NonNull;

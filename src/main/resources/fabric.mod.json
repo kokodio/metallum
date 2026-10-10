@@ -12,7 +12,6 @@
     "sources": "https://github.com/kokodio/metallum"
   },
   "license": "MIT",
-  "accessWidener": "metallum.accesswidener",
   "icon": "assets/metallum/icon.png",
   "environment": "*",
   "entrypoints": {
@@ -30,8 +29,8 @@
     "metallum.shine.mixins.json"
   ],
   "depends": {
-    "fabricloader": ">=0.19.2",
-    "minecraft": "~26.2-",
+    "fabricloader": ">=0.19.5",
+    "minecraft": "~26.3-",
     "java": ">=25"
   }
 }

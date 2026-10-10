@@ -1,6 +1,6 @@
 package com.metallum.render;
 
-import com.mojang.blaze3d.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
 import io.github.kokodio.metaljvm.metal.*;
 import net.fabricmc.api.EnvType;
 import net.fabricmc.api.Environment;
@@ -10,7 +10,7 @@ final class MetalConversions {
     private MetalConversions() {
     }
 
-    public static MTLPixelFormat pixelFormat(final com.mojang.blaze3d.GpuFormat format) {
+    public static MTLPixelFormat pixelFormat(final com.mojang.renderpearl.api.GpuFormat format) {
         return switch (format) {
             case R8_UNORM -> MTLPixelFormat.R8Unorm;
             case R8_SNORM -> MTLPixelFormat.R8Snorm;
@@ -60,7 +60,7 @@ final class MetalConversions {
         };
     }
 
-    public static MTLVertexFormat vertexFormat(final com.mojang.blaze3d.GpuFormat format) {
+    public static MTLVertexFormat vertexFormat(final com.mojang.renderpearl.api.GpuFormat format) {
         return switch (format) {
             case R32_FLOAT -> MTLVertexFormat.Float;
             case RG32_FLOAT -> MTLVertexFormat.Float2;
@@ -110,7 +110,7 @@ final class MetalConversions {
         };
     }
 
-    public static MTLBlendFactor blendFactor(final com.mojang.blaze3d.platform.BlendFactor factor) {
+    public static MTLBlendFactor blendFactor(final com.mojang.renderpearl.api.pipeline.BlendFactor factor) {
         return switch (factor) {
             case ZERO -> MTLBlendFactor.Zero;
             case ONE -> MTLBlendFactor.One;
@@ -130,7 +130,7 @@ final class MetalConversions {
         };
     }
 
-    public static MTLBlendOperation blendOperation(final com.mojang.blaze3d.platform.BlendOp op) {
+    public static MTLBlendOperation blendOperation(final com.mojang.renderpearl.api.pipeline.BlendOp op) {
         return switch (op) {
             case ADD -> MTLBlendOperation.Add;
             case SUBTRACT -> MTLBlendOperation.Subtract;
@@ -140,7 +140,7 @@ final class MetalConversions {
         };
     }
 
-    public static MTLCompareFunction compareFunction(final com.mojang.blaze3d.platform.CompareOp op) {
+    public static MTLCompareFunction compareFunction(final com.mojang.renderpearl.api.pipeline.CompareOp op) {
         return switch (op) {
             case NEVER_PASS -> MTLCompareFunction.Never;
             case LESS_THAN -> MTLCompareFunction.Less;
@@ -153,7 +153,7 @@ final class MetalConversions {
         };
     }
 
-    public static MTLPrimitiveType primitiveType(final com.mojang.blaze3d.PrimitiveTopology mode) {
+    public static MTLPrimitiveType primitiveType(final com.mojang.renderpearl.api.pipeline.PrimitiveTopology mode) {
         return switch (mode) {
             case TRIANGLES, QUADS, LINES -> MTLPrimitiveType.Triangle;
             case TRIANGLE_STRIP -> MTLPrimitiveType.TriangleStrip;
@@ -165,22 +165,22 @@ final class MetalConversions {
         };
     }
 
-    public static MTLSamplerMinMagFilter minMagFilter(final com.mojang.blaze3d.textures.FilterMode filterMode) {
+    public static MTLSamplerMinMagFilter minMagFilter(final com.mojang.renderpearl.api.textures.FilterMode filterMode) {
         return switch (filterMode) {
             case NEAREST -> MTLSamplerMinMagFilter.Nearest;
             case LINEAR -> MTLSamplerMinMagFilter.Linear;
         };
     }
 
-    public static MTLSamplerAddressMode addressMode(final com.mojang.blaze3d.textures.AddressMode addressMode) {
+    public static MTLSamplerAddressMode addressMode(final com.mojang.renderpearl.api.textures.AddressMode addressMode) {
         return switch (addressMode) {
             case REPEAT -> MTLSamplerAddressMode.Repeat;
             case CLAMP_TO_EDGE -> MTLSamplerAddressMode.ClampToEdge;
         };
     }
 
-    public static MTLIndexType indexType(final com.mojang.blaze3d.IndexType indexType) {
-        return indexType == com.mojang.blaze3d.IndexType.INT ? MTLIndexType.UInt32 : MTLIndexType.UInt16;
+    public static MTLIndexType indexType(final com.mojang.renderpearl.api.pipeline.IndexType indexType) {
+        return indexType == com.mojang.renderpearl.api.pipeline.IndexType.INT ? MTLIndexType.UInt32 : MTLIndexType.UInt16;
     }
 
     public static long colorWriteMask(@ColorTargetState.WriteMask final int blazeMask) {

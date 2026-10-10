@@ -1,14 +1,13 @@
 package com.metallum.render;
 
 import com.metallum.Metallum;
-import com.mojang.blaze3d.GpuFormat;
-import com.mojang.blaze3d.pipeline.BlendFunction;
-import com.mojang.blaze3d.pipeline.ColorTargetState;
-import com.mojang.blaze3d.pipeline.CompiledRenderPipeline;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.platform.PolygonMode;
-import com.mojang.blaze3d.vertex.VertexFormat;
-import com.mojang.blaze3d.vertex.VertexFormatElement;
+import com.mojang.renderpearl.api.GpuFormat;
+import com.mojang.renderpearl.api.pipeline.BlendFunction;
+import com.mojang.renderpearl.api.pipeline.ColorTargetState;
+import com.mojang.renderpearl.api.pipeline.DepthStencilState;
+import com.mojang.renderpearl.api.pipeline.PolygonMode;
+import com.mojang.renderpearl.api.pipeline.PrimitiveTopology;
+import com.mojang.renderpearl.backend.api.BackendRenderPipeline;
 import io.github.kokodio.metaljvm.metal.*;
 import io.github.kokodio.metaljvm.objc.AutoreleasePool;
 import it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
@@ -21,7 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 
 @Environment(EnvType.CLIENT)
-final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoCloseable {
+final class MetalCompiledRenderPipeline implements BackendRenderPipeline {
     enum ResourceKind {
         UNIFORM_BUFFER,
         SAMPLED_IMAGE,
@@ -37,7 +36,12 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
                            @Nullable GpuFormat texelBufferFormat) {
     }
 
+    record PushConstants(int metalIndex, int stageMask) {
+    }
+
     private final List<ResourceBinding> resources;
+    @Nullable
+    private final PushConstants pushConstants;
     private final Map<String, ResourceBinding> resourcesByName;
     private final long allResourceMask;
     private final int firstAvailableVertexBufferSlot;
@@ -56,17 +60,15 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
     private final int fullLayout;
     private final Int2ObjectOpenHashMap<MTLRenderPipelineState> pipelinesByLayout = new Int2ObjectOpenHashMap<>();
 
+    private boolean closed;
+
     MetalCompiledRenderPipeline(
             final MetalDevice device,
-            final RenderPipeline info,
-            final String vertexMsl,
-            final String fragmentMsl,
-            final String vertexEntryPoint,
-            final String fragmentEntryPoint,
-            final List<ResourceBinding> resources
+            final BackendRenderPipeline.CreateInfo info,
+            final MetalCrossShaderCompiler.Compiled compiled
     ) {
         this.device = device;
-        this.resources = resources;
+        this.resources = compiled.resources();
         this.resourcesByName = resources.stream().collect(java.util.stream.Collectors.toUnmodifiableMap(ResourceBinding::name, binding -> binding));
 
         int maxBindingIndex = -1;
@@ -75,42 +77,44 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
             maxBindingIndex = Math.max(maxBindingIndex, binding.bindingIndex());
             resourceMask |= 1L << binding.bindingIndex();
         }
-        if (maxBindingIndex >= Long.SIZE) {
-            throw new IllegalStateException("Pipeline " + info.getLocation() + " has binding index " + maxBindingIndex + ", limit is " + (Long.SIZE - 1));
+        if (maxBindingIndex >= ResourceBindings.MAX_BINDINGS) {
+            throw new IllegalStateException("Pipeline " + info.name() + " has binding index " + maxBindingIndex + ", limit is " + (ResourceBindings.MAX_BINDINGS - 1));
         }
         this.allResourceMask = resourceMask;
+        this.pushConstants = compiled.pushConstants();
 
-        this.firstAvailableVertexBufferSlot = firstAvailableVertexBufferSlot(resources);
-        this.cullMode = info.isCull() ? MTLCullMode.Back : MTLCullMode.None;
-        this.fillMode = info.getPolygonMode() == PolygonMode.WIREFRAME ? MTLTriangleFillMode.Lines : MTLTriangleFillMode.Fill;
-        this.topology = MetalConversions.primitiveType(info.getPrimitiveTopology());
-        this.triangleFan = info.getPrimitiveTopology() == com.mojang.blaze3d.PrimitiveTopology.TRIANGLE_FAN;
-        this.vertexBufferCount = info.getVertexFormatBindings().length;
+        this.firstAvailableVertexBufferSlot = firstAvailableVertexBufferSlot(resources, this.pushConstants);
+        this.cullMode = info.cull() ? MTLCullMode.Back : MTLCullMode.None;
+        this.fillMode = info.polygonMode() == PolygonMode.WIREFRAME ? MTLTriangleFillMode.Lines : MTLTriangleFillMode.Fill;
+        this.topology = MetalConversions.primitiveType(info.primitiveTopology());
+        this.triangleFan = info.primitiveTopology() == PrimitiveTopology.TRIANGLE_FAN;
+        int bufferCount = 0;
+        for (BackendRenderPipeline.CreateInfo.VertexBuffer vertexBuffer : info.vertexBuffers()) {
+            bufferCount = Math.max(bufferCount, vertexBuffer.bufferSlot() + 1);
+        }
+        this.vertexBufferCount = bufferCount;
 
         MTLCompareFunction depthCompareOp;
-        int depthWrite;
-        var depthStencilState = info.getDepthStencilState();
+        DepthStencilState depthStencilState = info.depthStencilState();
         if (depthStencilState == null) {
             depthCompareOp = MTLCompareFunction.Always;
-            depthWrite = 0;
             this.depthBiasScaleFactor = 0.0f;
             this.depthBiasConstant = 0.0f;
+            this.depthStencilState = device.depthStencilState(depthCompareOp, false);
         } else {
             depthCompareOp = MetalConversions.compareFunction(depthStencilState.depthTest());
-            depthWrite = depthStencilState.writeDepth() ? 1 : 0;
             this.depthBiasScaleFactor = depthStencilState.depthBiasScaleFactor();
             this.depthBiasConstant = depthStencilState.depthBiasConstant();
+            this.depthStencilState = device.depthStencilState(depthCompareOp, depthStencilState.writeDepth());
         }
 
-        this.depthStencilState = device.depthStencilState(depthCompareOp, depthWrite != 0);
+        MTLFunction vertexFunction = device.getOrCompileFunction(compiled.vertexSource(), compiled.vertexEntryPoint(), info.name() + " (vertex)");
+        MTLFunction fragmentFunction = device.getOrCompileFunction(compiled.fragmentSource(), compiled.fragmentEntryPoint(), info.name() + " (fragment)");
 
-        MTLFunction vertexFunction = device.getOrCompileFunction(vertexMsl, vertexEntryPoint, info.getVertexShader().toDebugFileName());
-        MTLFunction fragmentFunction = device.getOrCompileFunction(fragmentMsl, fragmentEntryPoint, info.getFragmentShader().toDebugFileName());
-
-        ColorTargetState[] colorTargets = info.getColorTargetStates();
+        List<ColorTargetState> colorTargets = info.colorTargetStates();
         int layout = LAYOUT_DEPTH | 1;
-        for (int i = 1; i < colorTargets.length; i++) {
-            if (colorTargets[i] != null) {
+        for (int i = 1; i < colorTargets.size(); i++) {
+            if (colorTargets.get(i) != null) {
                 layout |= 1 << i;
             }
         }
@@ -118,24 +122,24 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
 
         this.descriptor = vertexFunction == null || fragmentFunction == null ? null : buildDescriptor(device, info, vertexFunction, fragmentFunction, this.firstAvailableVertexBufferSlot);
         if (this.descriptor != null && getNativePipeline(layout) == null) {
-            Metallum.LOGGER.error("[metallum] Pipeline {} failed to build", info.getLocation());
+            Metallum.LOGGER.error("[metallum] Pipeline {} failed to build", info.name());
         }
     }
 
     private static MTLRenderPipelineDescriptor buildDescriptor(
             final MetalDevice device,
-            final RenderPipeline info,
+            final BackendRenderPipeline.CreateInfo info,
             final MTLFunction vertexFunction,
             final MTLFunction fragmentFunction,
             final int firstVertexBufferSlot
     ) {
-        ColorTargetState[] colorTargets = info.getColorTargetStates();
+        List<ColorTargetState> colorTargets = info.colorTargetStates();
         MTLVertexDescriptor vertexDescriptor = buildVertexDescriptor(info, firstVertexBufferSlot);
 
         try (AutoreleasePool _ = AutoreleasePool.push()) {
             MTLRenderPipelineDescriptor pipelineDesc = MTLRenderPipelineDescriptor.alloc().init();
             if (device.useLabels()) {
-                pipelineDesc.setLabel("Pipeline " + info.getLocation());
+                pipelineDesc.setLabel("Pipeline " + info.name());
             }
             pipelineDesc.setVertexFunction(vertexFunction);
             pipelineDesc.setFragmentFunction(fragmentFunction);
@@ -143,8 +147,8 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
             pipelineDesc.setDepthAttachmentPixelFormat(MTLPixelFormat.Depth32Float);
             vertexDescriptor.release();
 
-            for (int i = 0; i < Math.max(colorTargets.length, 1); i++) {
-                ColorTargetState colorTarget = i < colorTargets.length ? colorTargets[i] : null;
+            for (int i = 0; i < Math.max(colorTargets.size(), 1); i++) {
+                ColorTargetState colorTarget = i < colorTargets.size() ? colorTargets.get(i) : null;
                 if (colorTarget == null && i > 0) {
                     continue;
                 }
@@ -190,9 +194,13 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
         }
     }
 
-    @Override
-    public boolean isValid() {
+    boolean isValid() {
         return this.pipelinesByLayout.get(this.fullLayout) != null;
+    }
+
+    @Override
+    public boolean isClosed() {
+        return this.closed;
     }
 
     List<ResourceBinding> resources() {
@@ -201,6 +209,11 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
 
     long allResourceMask() {
         return this.allResourceMask;
+    }
+
+    @Nullable
+    PushConstants pushConstants() {
+        return this.pushConstants;
     }
 
     @Nullable
@@ -256,49 +269,41 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
     }
 
     private static MTLVertexDescriptor buildVertexDescriptor(
-            final RenderPipeline pipeline,
+            final BackendRenderPipeline.CreateInfo info,
             final int firstMetalVertexBufferSlot
     ) {
-        VertexFormat[] bindings = pipeline.getVertexFormatBindings();
         MTLVertexDescriptor vertexDesc = MTLVertexDescriptor.alloc().init();
-        long attrIndex = 0;
 
         try (AutoreleasePool _ = AutoreleasePool.push()) {
-            for (int i = 0; i < bindings.length; i++) {
-                VertexFormat binding = bindings[i];
-                if (binding == null || binding.getElements().isEmpty()) {
-                    continue;
-                }
-
-                int metalSlot = firstMetalVertexBufferSlot + i;
-
-                long stride = binding.getVertexSize();
-                long stepRate = binding.getStepRate();
-                MTLVertexStepFunction stepFunction = stepRate > 0 ? MTLVertexStepFunction.PerInstance : MTLVertexStepFunction.PerVertex;
+            for (BackendRenderPipeline.CreateInfo.VertexBuffer vertexBuffer : info.vertexBuffers()) {
+                int metalSlot = firstMetalVertexBufferSlot + vertexBuffer.bufferSlot();
+                long stepRate = vertexBuffer.stepRate();
                 MTLVertexBufferLayoutDescriptor layout = vertexDesc.layouts().objectAtIndexedSubscript(metalSlot);
-                layout.setStride(stride);
-                layout.setStepFunction(stepFunction);
+                layout.setStride(vertexBuffer.stride());
+                layout.setStepFunction(stepRate > 0 ? MTLVertexStepFunction.PerInstance : MTLVertexStepFunction.PerVertex);
                 layout.setStepRate(stepRate > 0 ? stepRate : 1);
+            }
 
-                for (VertexFormatElement element : binding.getElements()) {
-                    MTLVertexFormat format = MetalConversions.vertexFormat(element.format());
-                    if (format == MTLVertexFormat.Invalid) {
-                        throw new IllegalStateException("Unsupported vertex attribute format: " + element.format());
-                    }
-                    MTLVertexAttributeDescriptor attribute = vertexDesc.attributes().objectAtIndexedSubscript(attrIndex);
-                    attribute.setFormat(format);
-                    attribute.setOffset(element.offset());
-                    attribute.setBufferIndex(metalSlot);
-                    attrIndex++;
+            for (BackendRenderPipeline.CreateInfo.AttribBinding binding : info.attribBindings()) {
+                MTLVertexFormat format = MetalConversions.vertexFormat(binding.format());
+                if (format == MTLVertexFormat.Invalid) {
+                    throw new IllegalStateException("Unsupported vertex attribute format: " + binding.format());
                 }
+                MTLVertexAttributeDescriptor attribute = vertexDesc.attributes().objectAtIndexedSubscript(binding.location());
+                attribute.setFormat(format);
+                attribute.setOffset(binding.offset());
+                attribute.setBufferIndex(firstMetalVertexBufferSlot + binding.bufferSlot());
             }
         }
 
         return vertexDesc;
     }
 
-    private static int firstAvailableVertexBufferSlot(final List<ResourceBinding> resources) {
+    private static int firstAvailableVertexBufferSlot(final List<ResourceBinding> resources, @Nullable final PushConstants pushConstants) {
         int maxVertexBufferBinding = -1;
+        if (pushConstants != null && (pushConstants.stageMask() & STAGE_VERTEX) != 0) {
+            maxVertexBufferBinding = pushConstants.metalIndex();
+        }
         for (ResourceBinding resource : resources) {
             if (resource.kind() == ResourceKind.UNIFORM_BUFFER && (resource.stageMask() & STAGE_VERTEX) != 0) {
                 maxVertexBufferBinding = Math.max(maxVertexBufferBinding, resource.metalIndex());
@@ -309,6 +314,7 @@ final class MetalCompiledRenderPipeline implements CompiledRenderPipeline, AutoC
 
     @Override
     public void close() {
+        this.closed = true;
         for (MTLRenderPipelineState pipeline : this.pipelinesByLayout.values()) {
             if (pipeline != null) {
                 pipeline.release();
