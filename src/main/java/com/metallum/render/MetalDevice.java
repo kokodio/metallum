@@ -213,7 +213,7 @@ final class MetalDevice implements GpuDeviceBackend {
     }
 
     @Nullable
-    MTLFunction getOrCompileFunction(final String msl, final String entryPoint, final String name) {
+    synchronized MTLFunction getOrCompileFunction(final String msl, final String entryPoint, final String name) {
         return this.functionCache.computeIfAbsent(new MslFunctionKey(msl, entryPoint), key -> this.compileFunction(key, name));
     }
 
